@@ -1,26 +1,33 @@
-# Read this!
+# How does TypeScript formatting work?
 
-The files within this directory are copied and deployed with TypeScript as the set of APIs  available as a part of the JavaScript language.
+To format code you need to have a formatting context and a `SourceFile`.  The formatting context contains 
+all user settings like tab size, newline character, etc.
 
-There are three main domains of APIs in `src/lib`:
- 
- - **ECMAScript language features** - e.g. JavaScript APIs like functions on Array etc which are documented in [ECMA-262](https://tc39.es/ecma262/)
- - **DOM APIs** - e.g. APIs which are available in web browsers
- - **Intl APIs** - e.g. APIs scoped to `Intl` which are documented in [ECMA-402](https://www.ecma-international.org/publications-and-standards/standards/ecma-402/)
+The end result of formatting is represented by TextChange objects which hold the new string content, and 
+the text to replace it with. 
 
-## How do we figure out when to add something?
+```ts
+export interface TextChange {
+    span: TextSpan; // start, length
+    newText: string;
+}
+```
 
-TypeScript has a rule-of-thumb to only add something when it has got far enough through the standards process that it is more or less confirmed. For JavaScript APIs and language features, that means the proposal is at stage 3 or later.
+## Internals
 
-You can find the source of truth for modern language features and Intl APIs in these completed proposal lists:
+Most of the exposed APIs internally are `format*` and they all set up and configure `formatSpan` which could be considered the root call for formatting. Span in this case refers to the range of 
+the sourcefile which should be formatted. 
 
- - [JavaScript](https://github.com/tc39/proposals/blob/master/finished-proposals.md)
- - [Intl](https://github.com/tc39/proposals/blob/master/ecma402/finished-proposals.md)
+The formatSpan then uses a scanner (either with or without JSX support) which starts at the highest
+node the covers the span of text and recurses down through the node's children.
 
-For the DOM APIs, which are a bit more free-form, we have asked that APIs are available un-prefixed/flagged in at least 2 browser _engines_ (i.e. not just 2 chromium browsers.) 
+As it recurses, `processNode` is called on the children setting the indentation is decided and passed 
+through into each of that node's children.
 
-## Generated files
+The meat of formatting decisions is made via `processPair`, the pair here being the current node and the previous node. `processPair` which mutates the formatting context to represent the current place in the scanner and requests a set of rules which can be applied to the items via `createRulesMap`.
 
-The DOM files ending in `.generated.d.ts` aren't meant to be edited by hand.
+There are a lot of rules, which you can find in [rules.ts](./rules.ts) each one has a left and right reference to nodes or token ranges and note of what action should be applied by the formatter.
 
-If you need to make changes to such files, make a change to the input files for [**our library generator**](https://github.com/microsoft/TypeScript-DOM-lib-generator).
+### Where is this used?
+
+The formatter is used mainly from any language service operation that inserts or modifies code.  The formatter is not exported publicly, and so all usage can only come through the language server.
