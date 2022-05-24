@@ -1,1597 +1,777 @@
-/* @internal */
-namespace ts.textChanges {
+// Some tests have trailing whitespace
 
-    /**
-     * Currently for simplicity we store recovered positions on the node itself.
-     * It can be changed to side-table later if we decide that current design is too invasive.
-     */
-    function getPos(n: TextRange): number {
-        const result = (n as any).__pos;
-        Debug.assert(typeof result === "number");
-        return result;
-    }
+namespace ts {
+    describe("unittests:: services:: textChanges", () => {
+        function findChild(name: string, n: Node) {
+            return find(n)!;
 
-    function setPos(n: TextRange, pos: number): void {
-        Debug.assert(typeof pos === "number");
-        (n as any).__pos = pos;
-    }
-
-    function getEnd(n: TextRange): number {
-        const result = (n as any).__end;
-        Debug.assert(typeof result === "number");
-        return result;
-    }
-
-    function setEnd(n: TextRange, end: number): void {
-        Debug.assert(typeof end === "number");
-        (n as any).__end = end;
-    }
-
-    export interface ConfigurableStart {
-        leadingTriviaOption?: LeadingTriviaOption;
-    }
-    export interface ConfigurableEnd {
-        trailingTriviaOption?: TrailingTriviaOption;
-    }
-
-    export enum LeadingTriviaOption {
-        /** Exclude all leading trivia (use getStart()) */
-        Exclude,
-        /** Include leading trivia and,
-         * if there are no line breaks between the node and the previous token,
-         * include all trivia between the node and the previous token
-         */
-        IncludeAll,
-        /**
-         * Include attached JSDoc comments
-         */
-        JSDoc,
-        /**
-         * Only delete trivia on the same line as getStart().
-         * Used to avoid deleting leading comments
-         */
-        StartLine,
-    }
-
-    export enum TrailingTriviaOption {
-        /** Exclude all trailing trivia (use getEnd()) */
-        Exclude,
-        /** Doesn't include whitespace, but does strip comments */
-        ExcludeWhitespace,
-        /** Include trailing trivia */
-        Include,
-    }
-
-    function skipWhitespacesAndLineBreaks(text: string, start: number) {
-        return skipTrivia(text, start, /*stopAfterLineBreak*/ false, /*stopAtComments*/ true);
-    }
-
-    function hasCommentsBeforeLineBreak(text: string, start: number) {
-        let i = start;
-        while (i < text.length) {
-            const ch = text.charCodeAt(i);
-            if (isWhiteSpaceSingleLine(ch)) {
-                i++;
-                continue;
-            }
-            return ch === CharacterCodes.slash;
-        }
-        return false;
-    }
-
-    /**
-     * Usually node.pos points to a position immediately after the previous token.
-     * If this position is used as a beginning of the span to remove - it might lead to removing the trailing trivia of the previous node, i.e:
-     * const x; // this is x
-     *        ^ - pos for the next variable declaration will point here
-     * const y; // this is y
-     *        ^ - end for previous variable declaration
-     * Usually leading trivia of the variable declaration 'y' should not include trailing trivia (whitespace, comment 'this is x' and newline) from the preceding
-     * variable declaration and trailing trivia for 'y' should include (whitespace, comment 'this is y', newline).
-     * By default when removing nodes we adjust start and end positions to respect specification of the trivia above.
-     * If pos\end should be interpreted literally (that is, withouth including leading and trailing trivia), `leadingTriviaOption` should be set to `LeadingTriviaOption.Exclude`
-     * and `trailingTriviaOption` to `TrailingTriviaOption.Exclude`.
-     */
-    export interface ConfigurableStartEnd extends ConfigurableStart, ConfigurableEnd {}
-
-    const useNonAdjustedPositions: ConfigurableStartEnd = {
-        leadingTriviaOption: LeadingTriviaOption.Exclude,
-        trailingTriviaOption: TrailingTriviaOption.Exclude,
-    };
-
-    export interface InsertNodeOptions {
-        /**
-         * Text to be inserted before the new node
-         */
-        prefix?: string;
-        /**
-         * Text to be inserted after the new node
-         */
-        suffix?: string;
-        /**
-         * Text of inserted node will be formatted with this indentation, otherwise indentation will be inferred from the old node
-         */
-        indentation?: number;
-        /**
-         * Text of inserted node will be formatted with this delta, otherwise delta will be inferred from the new node kind
-         */
-        delta?: number;
-    }
-
-    export interface ReplaceWithMultipleNodesOptions extends InsertNodeOptions {
-        readonly joiner?: string;
-    }
-
-    enum ChangeKind {
-        Remove,
-        ReplaceWithSingleNode,
-        ReplaceWithMultipleNodes,
-        Text,
-    }
-
-    type Change = ReplaceWithSingleNode | ReplaceWithMultipleNodes | RemoveNode | ChangeText;
-
-    interface BaseChange {
-        readonly sourceFile: SourceFile;
-        readonly range: TextRange;
-    }
-
-    export interface ChangeNodeOptions extends ConfigurableStartEnd, InsertNodeOptions {}
-    interface ReplaceWithSingleNode extends BaseChange {
-        readonly kind: ChangeKind.ReplaceWithSingleNode;
-        readonly node: Node;
-        readonly options?: InsertNodeOptions;
-    }
-
-    interface RemoveNode extends BaseChange {
-        readonly kind: ChangeKind.Remove;
-        readonly node?: never;
-        readonly options?: never;
-    }
-
-    interface ReplaceWithMultipleNodes extends BaseChange {
-        readonly kind: ChangeKind.ReplaceWithMultipleNodes;
-        readonly nodes: readonly Node[];
-        readonly options?: ReplaceWithMultipleNodesOptions;
-    }
-
-    interface ChangeText extends BaseChange {
-        readonly kind: ChangeKind.Text;
-        readonly text: string;
-    }
-
-    function getAdjustedRange(sourceFile: SourceFile, startNode: Node, endNode: Node, options: ConfigurableStartEnd): TextRange {
-        return { pos: getAdjustedStartPosition(sourceFile, startNode, options), end: getAdjustedEndPosition(sourceFile, endNode, options) };
-    }
-
-    function getAdjustedStartPosition(sourceFile: SourceFile, node: Node, options: ConfigurableStartEnd, hasTrailingComment = false) {
-        const { leadingTriviaOption } = options;
-        if (leadingTriviaOption === LeadingTriviaOption.Exclude) {
-            return node.getStart(sourceFile);
-        }
-        if (leadingTriviaOption === LeadingTriviaOption.StartLine) {
-            const startPos = node.getStart(sourceFile);
-            const pos = getLineStartPositionForPosition(startPos, sourceFile);
-            return rangeContainsPosition(node, pos) ? pos : startPos;
-        }
-        if (leadingTriviaOption === LeadingTriviaOption.JSDoc) {
-            const JSDocComments = getJSDocCommentRanges(node, sourceFile.text);
-            if (JSDocComments?.length) {
-                return getLineStartPositionForPosition(JSDocComments[0].pos, sourceFile);
-            }
-        }
-        const fullStart = node.getFullStart();
-        const start = node.getStart(sourceFile);
-        if (fullStart === start) {
-            return start;
-        }
-        const fullStartLine = getLineStartPositionForPosition(fullStart, sourceFile);
-        const startLine = getLineStartPositionForPosition(start, sourceFile);
-        if (startLine === fullStartLine) {
-            // full start and start of the node are on the same line
-            //   a,     b;
-            //    ^     ^
-            //    |   start
-            // fullstart
-            // when b is replaced - we usually want to keep the leading trvia
-            // when b is deleted - we delete it
-            return leadingTriviaOption === LeadingTriviaOption.IncludeAll ? fullStart : start;
-        }
-
-        // if node has a trailing comments, use comment end position as the text has already been included.
-        if (hasTrailingComment) {
-            // Check first for leading comments as if the node is the first import, we want to exclude the trivia;
-            // otherwise we get the trailing comments.
-            const comment = getLeadingCommentRanges(sourceFile.text, fullStart)?.[0] || getTrailingCommentRanges(sourceFile.text, fullStart)?.[0];
-            if (comment) {
-                return skipTrivia(sourceFile.text, comment.end, /*stopAfterLineBreak*/ true, /*stopAtComments*/ true);
-            }
-        }
-
-        // get start position of the line following the line that contains fullstart position
-        // (but only if the fullstart isn't the very beginning of the file)
-        const nextLineStart = fullStart > 0 ? 1 : 0;
-        let adjustedStartPosition = getStartPositionOfLine(getLineOfLocalPosition(sourceFile, fullStartLine) + nextLineStart, sourceFile);
-        // skip whitespaces/newlines
-        adjustedStartPosition = skipWhitespacesAndLineBreaks(sourceFile.text, adjustedStartPosition);
-        return getStartPositionOfLine(getLineOfLocalPosition(sourceFile, adjustedStartPosition), sourceFile);
-    }
-
-    /** Return the end position of a multiline comment of it is on another line; otherwise returns `undefined`; */
-    function getEndPositionOfMultilineTrailingComment(sourceFile: SourceFile, node: Node, options: ConfigurableEnd): number | undefined {
-        const { end } = node;
-        const { trailingTriviaOption } = options;
-        if (trailingTriviaOption === TrailingTriviaOption.Include) {
-            // If the trailing comment is a multiline comment that extends to the next lines,
-            // return the end of the comment and track it for the next nodes to adjust.
-            const comments = getTrailingCommentRanges(sourceFile.text, end);
-            if (comments) {
-                const nodeEndLine = getLineOfLocalPosition(sourceFile, node.end);
-                for (const comment of comments) {
-                    // Single line can break the loop as trivia will only be this line.
-                    // Comments on subsequest lines are also ignored.
-                    if (comment.kind === SyntaxKind.SingleLineCommentTrivia || getLineOfLocalPosition(sourceFile, comment.pos) > nodeEndLine) {
-                        break;
-                    }
-
-                    // Get the end line of the comment and compare against the end line of the node.
-                    // If the comment end line position and the multiline comment extends to multiple lines,
-                    // then is safe to return the end position.
-                    const commentEndLine = getLineOfLocalPosition(sourceFile, comment.end);
-                    if (commentEndLine > nodeEndLine) {
-                        return skipTrivia(sourceFile.text, comment.end, /*stopAfterLineBreak*/ true, /*stopAtComments*/ true);
-                    }
+            function find(node: Node): Node | undefined {
+                if (isDeclaration(node) && node.name && isIdentifier(node.name) && node.name.escapedText === name) {
+                    return node;
+                }
+                else {
+                    return forEachChild(node, find);
                 }
             }
         }
 
-        return undefined;
-    }
+        const printerOptions = { newLine: NewLineKind.LineFeed };
+        const newLineCharacter = getNewLineCharacter(printerOptions);
 
-    function getAdjustedEndPosition(sourceFile: SourceFile, node: Node, options: ConfigurableEnd): number {
-        const { end } = node;
-        const { trailingTriviaOption } = options;
-        if (trailingTriviaOption === TrailingTriviaOption.Exclude) {
-            return end;
-        }
-        if (trailingTriviaOption === TrailingTriviaOption.ExcludeWhitespace) {
-            const comments = concatenate(getTrailingCommentRanges(sourceFile.text, end), getLeadingCommentRanges(sourceFile.text, end));
-            const realEnd = comments?.[comments.length - 1]?.end;
-            if (realEnd) {
-                return realEnd;
-            }
-            return end;
+        function getRuleProvider(placeOpenBraceOnNewLineForFunctions: boolean): formatting.FormatContext {
+            return formatting.getFormatContext(placeOpenBraceOnNewLineForFunctions ? { ...testFormatSettings, placeOpenBraceOnNewLineForFunctions: true } : testFormatSettings, notImplementedHost);
         }
 
-        const multilineEndPosition = getEndPositionOfMultilineTrailingComment(sourceFile, node, options);
-        if (multilineEndPosition) {
-            return multilineEndPosition;
-        }
+        // validate that positions that were recovered from the printed text actually match positions that will be created if the same text is parsed.
+        function verifyPositions(node: Node, text: string): void {
+            const nodeList = flattenNodes(node);
+            const sourceFile = createSourceFile("f.ts", text, ScriptTarget.ES2015);
+            const parsedNodeList = flattenNodes(sourceFile.statements[0]);
+            zipWith(nodeList, parsedNodeList, (left, right) => {
+                Debug.assert(left.pos === right.pos);
+                Debug.assert(left.end === right.end);
+            });
 
-        const newEnd = skipTrivia(sourceFile.text, end, /*stopAfterLineBreak*/ true);
+            function flattenNodes(n: Node) {
+                const data: (Node | NodeArray<Node>)[] = [];
+                walk(n);
+                return data;
 
-        return newEnd !== end && (trailingTriviaOption === TrailingTriviaOption.Include || isLineBreak(sourceFile.text.charCodeAt(newEnd - 1)))
-            ? newEnd
-            : end;
-    }
-
-    /**
-     * Checks if 'candidate' argument is a legal separator in the list that contains 'node' as an element
-     */
-    function isSeparator(node: Node, candidate: Node | undefined): candidate is Token<SyntaxKind.CommaToken | SyntaxKind.SemicolonToken> {
-        return !!candidate && !!node.parent && (candidate.kind === SyntaxKind.CommaToken || (candidate.kind === SyntaxKind.SemicolonToken && node.parent.kind === SyntaxKind.ObjectLiteralExpression));
-    }
-
-    export interface TextChangesContext {
-        host: LanguageServiceHost;
-        formatContext: formatting.FormatContext;
-        preferences: UserPreferences;
-    }
-
-    export type TypeAnnotatable = SignatureDeclaration | VariableDeclaration | ParameterDeclaration | PropertyDeclaration | PropertySignature;
-
-    export type ThisTypeAnnotatable = FunctionDeclaration | FunctionExpression;
-
-    export function isThisTypeAnnotatable(containingFunction: SignatureDeclaration): containingFunction is ThisTypeAnnotatable {
-        return isFunctionExpression(containingFunction) || isFunctionDeclaration(containingFunction);
-    }
-
-    export class ChangeTracker {
-        private readonly changes: Change[] = [];
-        private readonly newFiles: { readonly oldFile: SourceFile | undefined, readonly fileName: string, readonly statements: readonly (Statement | SyntaxKind.NewLineTrivia)[] }[] = [];
-        private readonly classesWithNodesInsertedAtStart = new Map<number, { readonly node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression, readonly sourceFile: SourceFile }>(); // Set<ClassDeclaration> implemented as Map<node id, ClassDeclaration>
-        private readonly deletedNodes: { readonly sourceFile: SourceFile, readonly node: Node | NodeArray<TypeParameterDeclaration> }[] = [];
-
-        public static fromContext(context: TextChangesContext): ChangeTracker {
-            return new ChangeTracker(getNewLineOrDefaultFromHost(context.host, context.formatContext.options), context.formatContext);
-        }
-
-        public static with(context: TextChangesContext, cb: (tracker: ChangeTracker) => void): FileTextChanges[] {
-            const tracker = ChangeTracker.fromContext(context);
-            cb(tracker);
-            return tracker.getChanges();
-        }
-
-        /** Public for tests only. Other callers should use `ChangeTracker.with`. */
-        constructor(private readonly newLineCharacter: string, private readonly formatContext: formatting.FormatContext) {}
-
-        public pushRaw(sourceFile: SourceFile, change: FileTextChanges) {
-            Debug.assertEqual(sourceFile.fileName, change.fileName);
-            for (const c of change.textChanges) {
-                this.changes.push({
-                    kind: ChangeKind.Text,
-                    sourceFile,
-                    text: c.newText,
-                    range: createTextRangeFromSpan(c.span),
-                });
-            }
-        }
-
-        public deleteRange(sourceFile: SourceFile, range: TextRange): void {
-            this.changes.push({ kind: ChangeKind.Remove, sourceFile, range });
-        }
-
-        delete(sourceFile: SourceFile, node: Node | NodeArray<TypeParameterDeclaration>): void {
-            this.deletedNodes.push({ sourceFile, node });
-        }
-
-        /** Stop! Consider using `delete` instead, which has logic for deleting nodes from delimited lists. */
-        public deleteNode(sourceFile: SourceFile, node: Node, options: ConfigurableStartEnd = { leadingTriviaOption: LeadingTriviaOption.IncludeAll }): void {
-            this.deleteRange(sourceFile, getAdjustedRange(sourceFile, node, node, options));
-        }
-
-        public deleteNodes(sourceFile: SourceFile, nodes: readonly Node[], options: ConfigurableStartEnd = { leadingTriviaOption: LeadingTriviaOption.IncludeAll }, hasTrailingComment: boolean): void {
-            // When deleting multiple nodes we need to track if the end position is including multiline trailing comments.
-            for (const node of nodes) {
-                const pos = getAdjustedStartPosition(sourceFile, node, options, hasTrailingComment);
-                const end = getAdjustedEndPosition(sourceFile, node, options);
-
-                this.deleteRange(sourceFile, { pos, end });
-
-                hasTrailingComment = !!getEndPositionOfMultilineTrailingComment(sourceFile, node, options);
-            }
-        }
-
-        public deleteModifier(sourceFile: SourceFile, modifier: Modifier): void {
-            this.deleteRange(sourceFile, { pos: modifier.getStart(sourceFile), end: skipTrivia(sourceFile.text, modifier.end, /*stopAfterLineBreak*/ true) });
-        }
-
-        public deleteNodeRange(sourceFile: SourceFile, startNode: Node, endNode: Node, options: ConfigurableStartEnd = { leadingTriviaOption: LeadingTriviaOption.IncludeAll }): void {
-            const startPosition = getAdjustedStartPosition(sourceFile, startNode, options);
-            const endPosition = getAdjustedEndPosition(sourceFile, endNode, options);
-            this.deleteRange(sourceFile, { pos: startPosition, end: endPosition });
-        }
-
-        public deleteNodeRangeExcludingEnd(sourceFile: SourceFile, startNode: Node, afterEndNode: Node | undefined, options: ConfigurableStartEnd = { leadingTriviaOption: LeadingTriviaOption.IncludeAll }): void {
-            const startPosition = getAdjustedStartPosition(sourceFile, startNode, options);
-            const endPosition = afterEndNode === undefined ? sourceFile.text.length : getAdjustedStartPosition(sourceFile, afterEndNode, options);
-            this.deleteRange(sourceFile, { pos: startPosition, end: endPosition });
-        }
-
-        public replaceRange(sourceFile: SourceFile, range: TextRange, newNode: Node, options: InsertNodeOptions = {}): void {
-            this.changes.push({ kind: ChangeKind.ReplaceWithSingleNode, sourceFile, range, options, node: newNode });
-        }
-
-        public replaceNode(sourceFile: SourceFile, oldNode: Node, newNode: Node, options: ChangeNodeOptions = useNonAdjustedPositions): void {
-            this.replaceRange(sourceFile, getAdjustedRange(sourceFile, oldNode, oldNode, options), newNode, options);
-        }
-
-        public replaceNodeRange(sourceFile: SourceFile, startNode: Node, endNode: Node, newNode: Node, options: ChangeNodeOptions = useNonAdjustedPositions): void {
-            this.replaceRange(sourceFile, getAdjustedRange(sourceFile, startNode, endNode, options), newNode, options);
-        }
-
-        private replaceRangeWithNodes(sourceFile: SourceFile, range: TextRange, newNodes: readonly Node[], options: ReplaceWithMultipleNodesOptions & ConfigurableStartEnd = {}): void {
-            this.changes.push({ kind: ChangeKind.ReplaceWithMultipleNodes, sourceFile, range, options, nodes: newNodes });
-        }
-
-        public replaceNodeWithNodes(sourceFile: SourceFile, oldNode: Node, newNodes: readonly Node[], options: ChangeNodeOptions = useNonAdjustedPositions): void {
-            this.replaceRangeWithNodes(sourceFile, getAdjustedRange(sourceFile, oldNode, oldNode, options), newNodes, options);
-        }
-
-        public replaceNodeWithText(sourceFile: SourceFile, oldNode: Node, text: string): void {
-            this.replaceRangeWithText(sourceFile, getAdjustedRange(sourceFile, oldNode, oldNode, useNonAdjustedPositions), text);
-        }
-
-        public replaceNodeRangeWithNodes(sourceFile: SourceFile, startNode: Node, endNode: Node, newNodes: readonly Node[], options: ReplaceWithMultipleNodesOptions & ConfigurableStartEnd = useNonAdjustedPositions): void {
-            this.replaceRangeWithNodes(sourceFile, getAdjustedRange(sourceFile, startNode, endNode, options), newNodes, options);
-        }
-
-        public nodeHasTrailingComment(sourceFile: SourceFile, oldNode: Node, configurableEnd: ConfigurableEnd = useNonAdjustedPositions): boolean {
-            return !!getEndPositionOfMultilineTrailingComment(sourceFile, oldNode, configurableEnd);
-        }
-
-        private nextCommaToken(sourceFile: SourceFile, node: Node): Node | undefined {
-            const next = findNextToken(node, node.parent, sourceFile);
-            return next && next.kind === SyntaxKind.CommaToken ? next : undefined;
-        }
-
-        public replacePropertyAssignment(sourceFile: SourceFile, oldNode: PropertyAssignment, newNode: PropertyAssignment): void {
-            const suffix = this.nextCommaToken(sourceFile, oldNode) ? "" : ("," + this.newLineCharacter);
-            this.replaceNode(sourceFile, oldNode, newNode, { suffix });
-        }
-
-        public insertNodeAt(sourceFile: SourceFile, pos: number, newNode: Node, options: InsertNodeOptions = {}): void {
-            this.replaceRange(sourceFile, createRange(pos), newNode, options);
-        }
-
-        private insertNodesAt(sourceFile: SourceFile, pos: number, newNodes: readonly Node[], options: ReplaceWithMultipleNodesOptions = {}): void {
-            this.replaceRangeWithNodes(sourceFile, createRange(pos), newNodes, options);
-        }
-
-        public insertNodeAtTopOfFile(sourceFile: SourceFile, newNode: Statement, blankLineBetween: boolean): void {
-            this.insertAtTopOfFile(sourceFile, newNode, blankLineBetween);
-        }
-
-        public insertNodesAtTopOfFile(sourceFile: SourceFile, newNodes: readonly Statement[], blankLineBetween: boolean): void {
-            this.insertAtTopOfFile(sourceFile, newNodes, blankLineBetween);
-        }
-
-        private insertAtTopOfFile(sourceFile: SourceFile, insert: Statement | readonly Statement[], blankLineBetween: boolean): void {
-            const pos = getInsertionPositionAtSourceFileTop(sourceFile);
-            const options = {
-                prefix: pos === 0 ? undefined : this.newLineCharacter,
-                suffix: (isLineBreak(sourceFile.text.charCodeAt(pos)) ? "" : this.newLineCharacter) + (blankLineBetween ? this.newLineCharacter : ""),
-            };
-            if (isArray(insert)) {
-                this.insertNodesAt(sourceFile, pos, insert, options);
-            }
-            else {
-                this.insertNodeAt(sourceFile, pos, insert, options);
-            }
-        }
-
-        public insertFirstParameter(sourceFile: SourceFile, parameters: NodeArray<ParameterDeclaration>, newParam: ParameterDeclaration): void {
-            const p0 = firstOrUndefined(parameters);
-            if (p0) {
-                this.insertNodeBefore(sourceFile, p0, newParam);
-            }
-            else {
-                this.insertNodeAt(sourceFile, parameters.pos, newParam);
-            }
-        }
-
-        public insertNodeBefore(sourceFile: SourceFile, before: Node, newNode: Node, blankLineBetween = false, options: ConfigurableStartEnd = {}): void {
-            this.insertNodeAt(sourceFile, getAdjustedStartPosition(sourceFile, before, options), newNode, this.getOptionsForInsertNodeBefore(before, newNode, blankLineBetween));
-        }
-
-        public insertModifierAt(sourceFile: SourceFile, pos: number, modifier: SyntaxKind, options: InsertNodeOptions = {}): void {
-            this.insertNodeAt(sourceFile, pos, factory.createToken(modifier), options);
-        }
-
-        public insertModifierBefore(sourceFile: SourceFile, modifier: SyntaxKind, before: Node): void {
-            return this.insertModifierAt(sourceFile, before.getStart(sourceFile), modifier, { suffix: " " });
-        }
-
-        public insertCommentBeforeLine(sourceFile: SourceFile, lineNumber: number, position: number, commentText: string): void {
-            const lineStartPosition = getStartPositionOfLine(lineNumber, sourceFile);
-            const startPosition = getFirstNonSpaceCharacterPosition(sourceFile.text, lineStartPosition);
-            // First try to see if we can put the comment on the previous line.
-            // We need to make sure that we are not in the middle of a string literal or a comment.
-            // If so, we do not want to separate the node from its comment if we can.
-            // Otherwise, add an extra new line immediately before the error span.
-            const insertAtLineStart = isValidLocationToAddComment(sourceFile, startPosition);
-            const token = getTouchingToken(sourceFile, insertAtLineStart ? startPosition : position);
-            const indent = sourceFile.text.slice(lineStartPosition, startPosition);
-            const text = `${insertAtLineStart ? "" : this.newLineCharacter}//${commentText}${this.newLineCharacter}${indent}`;
-            this.insertText(sourceFile, token.getStart(sourceFile), text);
-        }
-
-        public insertJsdocCommentBefore(sourceFile: SourceFile, node: HasJSDoc, tag: JSDoc): void {
-            const fnStart = node.getStart(sourceFile);
-            if (node.jsDoc) {
-                for (const jsdoc of node.jsDoc) {
-                    this.deleteRange(sourceFile, {
-                        pos: getLineStartPositionForPosition(jsdoc.getStart(sourceFile), sourceFile),
-                        end: getAdjustedEndPosition(sourceFile, jsdoc, /*options*/ {})
-                    });
+                function walk(n: Node | NodeArray<Node>): void {
+                    data.push(n);
+                    return isArray(n) ? forEach(n, walk) : forEachChild(n, walk, walk);
                 }
             }
-            const startPosition = getPrecedingNonSpaceCharacterPosition(sourceFile.text, fnStart - 1);
-            const indent = sourceFile.text.slice(startPosition, fnStart);
-            this.insertNodeAt(sourceFile, fnStart, tag, { suffix: this.newLineCharacter + indent });
         }
 
-        private createJSDocText(sourceFile: SourceFile, node: HasJSDoc) {
-            const comments = flatMap(node.jsDoc, jsDoc =>
-                isString(jsDoc.comment) ? factory.createJSDocText(jsDoc.comment) : jsDoc.comment) as JSDocComment[];
-            const jsDoc = singleOrUndefined(node.jsDoc);
-            return jsDoc && positionsAreOnSameLine(jsDoc.pos, jsDoc.end, sourceFile) && length(comments) === 0 ? undefined :
-                factory.createNodeArray(intersperse(comments, factory.createJSDocText("\n")));
-        }
-
-        public replaceJSDocComment(sourceFile: SourceFile, node: HasJSDoc, tags: readonly JSDocTag[]) {
-            this.insertJsdocCommentBefore(sourceFile, updateJSDocHost(node), factory.createJSDocComment(this.createJSDocText(sourceFile, node), factory.createNodeArray(tags)));
-        }
-
-        public addJSDocTags(sourceFile: SourceFile, parent: HasJSDoc, newTags: readonly JSDocTag[]): void {
-            const oldTags = flatMapToMutable(parent.jsDoc, j => j.tags);
-            const unmergedNewTags = newTags.filter(newTag => !oldTags.some((tag, i) => {
-                const merged = tryMergeJsdocTags(tag, newTag);
-                if (merged) oldTags[i] = merged;
-                return !!merged;
-            }));
-            this.replaceJSDocComment(sourceFile, parent, [...oldTags, ...unmergedNewTags]);
-        }
-
-        public filterJSDocTags(sourceFile: SourceFile, parent: HasJSDoc, predicate: (tag: JSDocTag) => boolean): void {
-            this.replaceJSDocComment(sourceFile, parent, filter(flatMapToMutable(parent.jsDoc, j => j.tags), predicate));
-        }
-
-        public replaceRangeWithText(sourceFile: SourceFile, range: TextRange, text: string): void {
-            this.changes.push({ kind: ChangeKind.Text, sourceFile, range, text });
-        }
-
-        public insertText(sourceFile: SourceFile, pos: number, text: string): void {
-            this.replaceRangeWithText(sourceFile, createRange(pos), text);
-        }
-
-        /** Prefer this over replacing a node with another that has a type annotation, as it avoids reformatting the other parts of the node. */
-        public tryInsertTypeAnnotation(sourceFile: SourceFile, node: TypeAnnotatable, type: TypeNode): boolean {
-            let endNode: Node | undefined;
-            if (isFunctionLike(node)) {
-                endNode = findChildOfKind(node, SyntaxKind.CloseParenToken, sourceFile);
-                if (!endNode) {
-                    if (!isArrowFunction(node)) return false; // Function missing parentheses, give up
-                    // If no `)`, is an arrow function `x => x`, so use the end of the first parameter
-                    endNode = first(node.parameters);
-                }
-            }
-            else {
-                endNode = (node.kind === SyntaxKind.VariableDeclaration ? node.exclamationToken : node.questionToken) ?? node.name;
-            }
-
-            this.insertNodeAt(sourceFile, endNode.end, type, { prefix: ": " });
-            return true;
-        }
-
-        public tryInsertThisTypeAnnotation(sourceFile: SourceFile, node: ThisTypeAnnotatable, type: TypeNode): void {
-            const start = findChildOfKind(node, SyntaxKind.OpenParenToken, sourceFile)!.getStart(sourceFile) + 1;
-            const suffix = node.parameters.length ? ", " : "";
-
-            this.insertNodeAt(sourceFile, start, type, { prefix: "this: ", suffix });
-        }
-
-        public insertTypeParameters(sourceFile: SourceFile, node: SignatureDeclaration, typeParameters: readonly TypeParameterDeclaration[]): void {
-            // If no `(`, is an arrow function `x => x`, so use the pos of the first parameter
-            const start = (findChildOfKind(node, SyntaxKind.OpenParenToken, sourceFile) || first(node.parameters)).getStart(sourceFile);
-            this.insertNodesAt(sourceFile, start, typeParameters, { prefix: "<", suffix: ">", joiner: ", " });
-        }
-
-        private getOptionsForInsertNodeBefore(before: Node, inserted: Node, blankLineBetween: boolean): InsertNodeOptions {
-            if (isStatement(before) || isClassElement(before)) {
-                return { suffix: blankLineBetween ? this.newLineCharacter + this.newLineCharacter : this.newLineCharacter };
-            }
-            else if (isVariableDeclaration(before)) { // insert `x = 1, ` into `const x = 1, y = 2;
-                return { suffix: ", " };
-            }
-            else if (isParameter(before)) {
-                return isParameter(inserted) ? { suffix: ", " } : {};
-            }
-            else if (isStringLiteral(before) && isImportDeclaration(before.parent) || isNamedImports(before)) {
-                return { suffix: ", " };
-            }
-            else if (isImportSpecifier(before)) {
-                return { suffix: "," + (blankLineBetween ? this.newLineCharacter : " ") };
-            }
-            return Debug.failBadSyntaxKind(before); // We haven't handled this kind of node yet -- add it
-        }
-
-        public insertNodeAtConstructorStart(sourceFile: SourceFile, ctr: ConstructorDeclaration, newStatement: Statement): void {
-            const firstStatement = firstOrUndefined(ctr.body!.statements);
-            if (!firstStatement || !ctr.body!.multiLine) {
-                this.replaceConstructorBody(sourceFile, ctr, [newStatement, ...ctr.body!.statements]);
-            }
-            else {
-                this.insertNodeBefore(sourceFile, firstStatement, newStatement);
-            }
-        }
-
-        public insertNodeAtConstructorStartAfterSuperCall(sourceFile: SourceFile, ctr: ConstructorDeclaration, newStatement: Statement): void {
-            const superCallStatement = find(ctr.body!.statements, stmt => isExpressionStatement(stmt) && isSuperCall(stmt.expression));
-            if (!superCallStatement || !ctr.body!.multiLine) {
-                this.replaceConstructorBody(sourceFile, ctr, [...ctr.body!.statements, newStatement]);
-            }
-            else {
-                this.insertNodeAfter(sourceFile, superCallStatement, newStatement);
-            }
-        }
-
-        public insertNodeAtConstructorEnd(sourceFile: SourceFile, ctr: ConstructorDeclaration, newStatement: Statement): void {
-            const lastStatement = lastOrUndefined(ctr.body!.statements);
-            if (!lastStatement || !ctr.body!.multiLine) {
-                this.replaceConstructorBody(sourceFile, ctr, [...ctr.body!.statements, newStatement]);
-            }
-            else {
-                this.insertNodeAfter(sourceFile, lastStatement, newStatement);
-            }
-        }
-
-        private replaceConstructorBody(sourceFile: SourceFile, ctr: ConstructorDeclaration, statements: readonly Statement[]): void {
-            this.replaceNode(sourceFile, ctr.body!, factory.createBlock(statements, /*multiLine*/ true));
-        }
-
-        public insertNodeAtEndOfScope(sourceFile: SourceFile, scope: Node, newNode: Node): void {
-            const pos = getAdjustedStartPosition(sourceFile, scope.getLastToken()!, {});
-            this.insertNodeAt(sourceFile, pos, newNode, {
-                prefix: isLineBreak(sourceFile.text.charCodeAt(scope.getLastToken()!.pos)) ? this.newLineCharacter : this.newLineCharacter + this.newLineCharacter,
-                suffix: this.newLineCharacter
+        function runSingleFileTest(caption: string, placeOpenBraceOnNewLineForFunctions: boolean, text: string, validateNodes: boolean, testBlock: (sourceFile: SourceFile, changeTracker: textChanges.ChangeTracker) => void) {
+            it(caption, () => {
+                const sourceFile = createSourceFile("source.ts", text, ScriptTarget.ES2015, /*setParentNodes*/ true);
+                const rulesProvider = getRuleProvider(placeOpenBraceOnNewLineForFunctions);
+                const changeTracker = new textChanges.ChangeTracker(newLineCharacter, rulesProvider);
+                testBlock(sourceFile, changeTracker);
+                const changes = changeTracker.getChanges(validateNodes ? verifyPositions : undefined);
+                assert.equal(changes.length, 1);
+                assert.equal(changes[0].fileName, sourceFile.fileName);
+                const modified = textChanges.applyChanges(sourceFile.text, changes[0].textChanges);
+                Harness.Baseline.runBaseline(`textChanges/${caption}.js`, `===ORIGINAL===${newLineCharacter}${text}${newLineCharacter}===MODIFIED===${newLineCharacter}${modified}`);
             });
         }
 
-        public insertMemberAtStart(sourceFile: SourceFile, node: ClassLikeDeclaration | InterfaceDeclaration | TypeLiteralNode, newElement: ClassElement | PropertySignature | MethodSignature): void {
-            this.insertNodeAtStartWorker(sourceFile, node, newElement);
-        }
+        {
+            const text = `
+namespace M
+{
+    namespace M2
+    {
+        function foo() {
+            // comment 1
+            const x = 1;
 
-        public insertNodeAtObjectStart(sourceFile: SourceFile, obj: ObjectLiteralExpression, newElement: ObjectLiteralElementLike): void {
-            this.insertNodeAtStartWorker(sourceFile, obj, newElement);
-        }
-
-        private insertNodeAtStartWorker(sourceFile: SourceFile, node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression | TypeLiteralNode, newElement: ClassElement | ObjectLiteralElementLike | PropertySignature | MethodSignature): void {
-            const indentation = this.guessIndentationFromExistingMembers(sourceFile, node) ?? this.computeIndentationForNewMember(sourceFile, node);
-            this.insertNodeAt(sourceFile, getMembersOrProperties(node).pos, newElement, this.getInsertNodeAtStartInsertOptions(sourceFile, node, indentation));
-        }
-
-        /**
-         * Tries to guess the indentation from the existing members of a class/interface/object. All members must be on
-         * new lines and must share the same indentation.
-         */
-        private guessIndentationFromExistingMembers(sourceFile: SourceFile, node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression | TypeLiteralNode) {
-            let indentation: number | undefined;
-            let lastRange: TextRange = node;
-            for (const member of getMembersOrProperties(node)) {
-                if (rangeStartPositionsAreOnSameLine(lastRange, member, sourceFile)) {
-                    // each indented member must be on a new line
-                    return undefined;
-                }
-                const memberStart = member.getStart(sourceFile);
-                const memberIndentation = formatting.SmartIndenter.findFirstNonWhitespaceColumn(getLineStartPositionForPosition(memberStart, sourceFile), memberStart, sourceFile, this.formatContext.options);
-                if (indentation === undefined) {
-                    indentation = memberIndentation;
-                }
-                else if (memberIndentation !== indentation) {
-                    // indentation of multiple members is not consistent
-                    return undefined;
-                }
-                lastRange = member;
+            /**
+             * comment 2 line 1
+             * comment 2 line 2
+             */
+            function f() {
+                return 100;
             }
-            return indentation;
+            const y = 2; // comment 3
+            return 1;
         }
+    }
+}`;
+            runSingleFileTest("extractMethodLike", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                const statements = (findChild("foo", sourceFile) as FunctionDeclaration).body!.statements.slice(1);
+                const newFunction = factory.createFunctionDeclaration(
+                    /*decorators*/ undefined,
+                    /*modifiers*/ undefined,
+                    /*asteriskToken*/ undefined,
+                    /*name*/ "bar",
+                    /*typeParameters*/ undefined,
+                    /*parameters*/ emptyArray,
+                    /*type*/ factory.createKeywordTypeNode(SyntaxKind.AnyKeyword),
+                    /*body */ factory.createBlock(statements)
+                );
 
-        private computeIndentationForNewMember(sourceFile: SourceFile, node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression | TypeLiteralNode) {
-            const nodeStart = node.getStart(sourceFile);
-            return formatting.SmartIndenter.findFirstNonWhitespaceColumn(getLineStartPositionForPosition(nodeStart, sourceFile), nodeStart, sourceFile, this.formatContext.options)
-                + (this.formatContext.options.indentSize ?? 4);
+                changeTracker.insertNodeBefore(sourceFile, /*before*/findChild("M2", sourceFile), newFunction);
+
+                // replace statements with return statement
+                const newStatement = factory.createReturnStatement(
+                    factory.createCallExpression(
+                        /*expression*/ newFunction.name!,
+                        /*typeArguments*/ undefined,
+                        /*argumentsArray*/ emptyArray
+                    ));
+                changeTracker.replaceNodeRange(sourceFile, statements[0], last(statements), newStatement, { suffix: newLineCharacter });
+            });
         }
+        {
+            const text = `
+function foo() {
+    return 1;
+}
 
-        private getInsertNodeAtStartInsertOptions(sourceFile: SourceFile, node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression | TypeLiteralNode, indentation: number): InsertNodeOptions {
-            // Rules:
-            // - Always insert leading newline.
-            // - For object literals:
-            //   - Add a trailing comma if there are existing members in the node, or the source file is not a JSON file
-            //     (because trailing commas are generally illegal in a JSON file).
-            //   - Add a leading comma if the source file is not a JSON file, there are existing insertions,
-            //     and the node is empty (because we didn't add a trailing comma per the previous rule).
-            // - Only insert a trailing newline if body is single-line and there are no other insertions for the node.
-            //   NOTE: This is handled in `finishClassesWithNodesInsertedAtStart`.
-
-            const members = getMembersOrProperties(node);
-            const isEmpty = members.length === 0;
-            const isFirstInsertion = addToSeen(this.classesWithNodesInsertedAtStart, getNodeId(node), { node, sourceFile });
-            const insertTrailingComma = isObjectLiteralExpression(node) && (!isJsonSourceFile(sourceFile) || !isEmpty);
-            const insertLeadingComma = isObjectLiteralExpression(node) && isJsonSourceFile(sourceFile) && isEmpty && !isFirstInsertion;
-            return {
-                indentation,
-                prefix: (insertLeadingComma ? "," : "") + this.newLineCharacter,
-                suffix: insertTrailingComma ? "," : ""
-            };
+function bar() {
+    return 2;
+}
+`;
+            runSingleFileTest("deleteRange1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.deleteRange(sourceFile, { pos: text.indexOf("function foo"), end: text.indexOf("function bar") });
+            });
         }
-
-        public insertNodeAfterComma(sourceFile: SourceFile, after: Node, newNode: Node): void {
-            const endPosition = this.insertNodeAfterWorker(sourceFile, this.nextCommaToken(sourceFile, after) || after, newNode);
-            this.insertNodeAt(sourceFile, endPosition, newNode, this.getInsertNodeAfterOptions(sourceFile, after));
+        function findVariableStatementContaining(name: string, sourceFile: SourceFile): VariableStatement {
+            return cast(findVariableDeclarationContaining(name, sourceFile).parent.parent, isVariableStatement);
         }
-
-        public insertNodeAfter(sourceFile: SourceFile, after: Node, newNode: Node): void {
-            const endPosition = this.insertNodeAfterWorker(sourceFile, after, newNode);
-            this.insertNodeAt(sourceFile, endPosition, newNode, this.getInsertNodeAfterOptions(sourceFile, after));
+        function findVariableDeclarationContaining(name: string, sourceFile: SourceFile): VariableDeclaration {
+            return cast(findChild(name, sourceFile), isVariableDeclaration);
         }
-
-        public insertNodeAtEndOfList(sourceFile: SourceFile, list: NodeArray<Node>, newNode: Node): void {
-            this.insertNodeAt(sourceFile, list.end, newNode, { prefix: ", " });
+        const { deleteNode } = textChanges;
+        {
+            const text = `
+var x = 1; // some comment - 1
+/**
+ * comment 2
+ */
+var y = 2; // comment 3
+var z = 3; // comment 4
+`;
+            runSingleFileTest("deleteNode1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findVariableStatementContaining("y", sourceFile));
+            });
+            runSingleFileTest("deleteNode2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findVariableStatementContaining("y", sourceFile), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude });
+            });
+            runSingleFileTest("deleteNode3", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findVariableStatementContaining("y", sourceFile), { trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
+            runSingleFileTest("deleteNode4", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findVariableStatementContaining("y", sourceFile), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
+            runSingleFileTest("deleteNode5", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findVariableStatementContaining("x", sourceFile));
+            });
         }
-
-        public insertNodesAfter(sourceFile: SourceFile, after: Node, newNodes: readonly Node[]): void {
-            const endPosition = this.insertNodeAfterWorker(sourceFile, after, first(newNodes));
-            this.insertNodesAt(sourceFile, endPosition, newNodes, this.getInsertNodeAfterOptions(sourceFile, after));
+        {
+            const text = `
+// comment 1
+var x = 1; // comment 2
+// comment 3
+var y = 2; // comment 4
+var z = 3; // comment 5
+// comment 6
+var a = 4; // comment 7
+`;
+            runSingleFileTest("deleteNodeRange1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.deleteNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile));
+            });
+            runSingleFileTest("deleteNodeRange2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.deleteNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile),
+                    { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude });
+            });
+            runSingleFileTest("deleteNodeRange3", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.deleteNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile),
+                    { trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
+            runSingleFileTest("deleteNodeRange4", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.deleteNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile),
+                    { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
         }
-
-        private insertNodeAfterWorker(sourceFile: SourceFile, after: Node, newNode: Node): number {
-            if (needSemicolonBetween(after, newNode)) {
-                // check if previous statement ends with semicolon
-                // if not - insert semicolon to preserve the code from changing the meaning due to ASI
-                if (sourceFile.text.charCodeAt(after.end - 1) !== CharacterCodes.semicolon) {
-                    this.replaceRange(sourceFile, createRange(after.end), factory.createToken(SyntaxKind.SemicolonToken));
-                }
-            }
-            const endPosition = getAdjustedEndPosition(sourceFile, after, {});
-            return endPosition;
+        function createTestVariableDeclaration(name: string) {
+            return factory.createVariableDeclaration(name, /*exclamationToken*/ undefined, /*type*/ undefined, factory.createObjectLiteralExpression([factory.createPropertyAssignment("p1", factory.createNumericLiteral(1))], /*multiline*/ true));
         }
-
-        private getInsertNodeAfterOptions(sourceFile: SourceFile, after: Node): InsertNodeOptions {
-            const options = this.getInsertNodeAfterOptionsWorker(after);
-            return {
-                ...options,
-                prefix: after.end === sourceFile.end && isStatement(after) ? (options.prefix ? `\n${options.prefix}` : "\n") : options.prefix,
-            };
+        function createTestClass() {
+            return factory.createClassDeclaration(
+                /*decorators*/ undefined,
+                [
+                    factory.createToken(SyntaxKind.PublicKeyword)
+                ],
+                "class1",
+                /*typeParameters*/ undefined,
+                [
+                    factory.createHeritageClause(
+                        SyntaxKind.ImplementsKeyword,
+                        [
+                            factory.createExpressionWithTypeArguments(factory.createIdentifier("interface1"), /*typeArguments*/ undefined)
+                        ]
+                    )
+                ],
+                [
+                    factory.createPropertyDeclaration(
+                        /*decorators*/ undefined,
+                        /*modifiers*/ undefined,
+                        "property1",
+                        /*questionToken*/ undefined,
+                        factory.createKeywordTypeNode(SyntaxKind.BooleanKeyword),
+                        /*initializer*/ undefined
+                    )
+                ]
+            );
         }
+        {
+            const text = `
+// comment 1
+var x = 1; // comment 2
+// comment 3
+var y = 2; // comment 4
+var z = 3; // comment 5
+// comment 6
+var a = 4; // comment 7`;
+            runSingleFileTest("replaceRange", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceRange(sourceFile, { pos: text.indexOf("var y"), end: text.indexOf("var a") }, createTestClass(), { suffix: newLineCharacter });
+            });
+            runSingleFileTest("replaceRangeWithForcedIndentation", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceRange(sourceFile, { pos: text.indexOf("var y"), end: text.indexOf("var a") }, createTestClass(), { suffix: newLineCharacter, indentation: 8, delta: 0 });
+            });
 
-        private getInsertNodeAfterOptionsWorker(node: Node): InsertNodeOptions {
-            switch (node.kind) {
-                case SyntaxKind.ClassDeclaration:
-                case SyntaxKind.ModuleDeclaration:
-                    return { prefix: this.newLineCharacter, suffix: this.newLineCharacter };
-
-                case SyntaxKind.VariableDeclaration:
-                case SyntaxKind.StringLiteral:
-                case SyntaxKind.Identifier:
-                    return { prefix: ", " };
-
-                case SyntaxKind.PropertyAssignment:
-                    return { suffix: "," + this.newLineCharacter };
-
-                case SyntaxKind.ExportKeyword:
-                    return { prefix: " " };
-
-                case SyntaxKind.Parameter:
-                    return {};
-
-                default:
-                    Debug.assert(isStatement(node) || isClassOrTypeElement(node)); // Else we haven't handled this kind of node yet -- add it
-                    return { suffix: this.newLineCharacter };
-            }
+            runSingleFileTest("replaceRangeNoLineBreakBefore", /*placeOpenBraceOnNewLineForFunctions*/ true, `const x = 1, y = "2";`, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = createTestVariableDeclaration("z1");
+                changeTracker.replaceRange(sourceFile, { pos: sourceFile.text.indexOf("y"), end: sourceFile.text.indexOf(";") }, newNode);
+            });
         }
-
-        public insertName(sourceFile: SourceFile, node: FunctionExpression | ClassExpression | ArrowFunction, name: string): void {
-            Debug.assert(!node.name);
-            if (node.kind === SyntaxKind.ArrowFunction) {
-                const arrow = findChildOfKind(node, SyntaxKind.EqualsGreaterThanToken, sourceFile)!;
-                const lparen = findChildOfKind(node, SyntaxKind.OpenParenToken, sourceFile);
-                if (lparen) {
-                    // `() => {}` --> `function f() {}`
-                    this.insertNodesAt(sourceFile, lparen.getStart(sourceFile), [factory.createToken(SyntaxKind.FunctionKeyword), factory.createIdentifier(name)], { joiner: " " });
-                    deleteNode(this, sourceFile, arrow);
-                }
-                else {
-                    // `x => {}` -> `function f(x) {}`
-                    this.insertText(sourceFile, first(node.parameters).getStart(sourceFile), `function ${name}(`);
-                    // Replacing full range of arrow to get rid of the leading space -- replace ` =>` with `)`
-                    this.replaceRange(sourceFile, arrow, factory.createToken(SyntaxKind.CloseParenToken));
-                }
-
-                if (node.body.kind !== SyntaxKind.Block) {
-                    // `() => 0` => `function f() { return 0; }`
-                    this.insertNodesAt(sourceFile, node.body.getStart(sourceFile), [factory.createToken(SyntaxKind.OpenBraceToken), factory.createToken(SyntaxKind.ReturnKeyword)], { joiner: " ", suffix: " " });
-                    this.insertNodesAt(sourceFile, node.body.end, [factory.createToken(SyntaxKind.SemicolonToken), factory.createToken(SyntaxKind.CloseBraceToken)], { joiner: " " });
-                }
-            }
-            else {
-                const pos = findChildOfKind(node, node.kind === SyntaxKind.FunctionExpression ? SyntaxKind.FunctionKeyword : SyntaxKind.ClassKeyword, sourceFile)!.end;
-                this.insertNodeAt(sourceFile, pos, factory.createIdentifier(name), { prefix: " " });
-            }
+        {
+            const text = `
+namespace A {
+    const x = 1, y = "2";
+}
+`;
+            runSingleFileTest("replaceNode1NoLineBreakBefore", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = createTestVariableDeclaration("z1");
+                changeTracker.replaceNode(sourceFile, findChild("y", sourceFile), newNode);
+            });
         }
-
-        public insertExportModifier(sourceFile: SourceFile, node: DeclarationStatement | VariableStatement): void {
-            this.insertText(sourceFile, node.getStart(sourceFile), "export ");
+        {
+            const text = `
+// comment 1
+var x = 1; // comment 2
+// comment 3
+var y = 2; // comment 4
+var z = 3; // comment 5
+// comment 6
+var a = 4; // comment 7`;
+            runSingleFileTest("replaceNode1", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNode(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass(), { suffix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNode2", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNode(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass(), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, suffix: newLineCharacter, prefix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNode3", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNode(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass(), { trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude, suffix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNode4", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNode(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass(), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
+            runSingleFileTest("replaceNode5", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNode(sourceFile, findVariableStatementContaining("x", sourceFile), createTestClass(), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
         }
-
-        public insertImportSpecifierAtIndex(sourceFile: SourceFile, importSpecifier: ImportSpecifier, namedImports: NamedImports, index: number) {
-            const prevSpecifier = namedImports.elements[index - 1];
-            if (prevSpecifier) {
-                this.insertNodeInListAfter(sourceFile, prevSpecifier, importSpecifier);
-            }
-            else {
-                this.insertNodeBefore(
-                    sourceFile,
-                    namedImports.elements[0],
-                    importSpecifier,
-                    !positionsAreOnSameLine(namedImports.elements[0].getStart(), namedImports.parent.parent.getStart(), sourceFile));
-            }
+        {
+            const text = `
+// comment 1
+var x = 1; // comment 2
+// comment 3
+var y = 2; // comment 4
+var z = 3; // comment 5
+// comment 6
+var a = 4; // comment 7`;
+            runSingleFileTest("replaceNodeRange1", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile), createTestClass(), { suffix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNodeRange2", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile), createTestClass(), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, suffix: newLineCharacter, prefix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNodeRange3", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile), createTestClass(), { trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude, suffix: newLineCharacter });
+            });
+            runSingleFileTest("replaceNodeRange4", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.replaceNodeRange(sourceFile, findVariableStatementContaining("y", sourceFile), findVariableStatementContaining("z", sourceFile), createTestClass(), { leadingTriviaOption: textChanges.LeadingTriviaOption.Exclude, trailingTriviaOption: textChanges.TrailingTriviaOption.Exclude });
+            });
         }
-
-        /**
-         * This function should be used to insert nodes in lists when nodes don't carry separators as the part of the node range,
-         * i.e. arguments in arguments lists, parameters in parameter lists etc.
-         * Note that separators are part of the node in statements and class elements.
-         */
-        public insertNodeInListAfter(sourceFile: SourceFile, after: Node, newNode: Node, containingList = formatting.SmartIndenter.getContainingList(after, sourceFile)): void {
-            if (!containingList) {
-                Debug.fail("node is not a list element");
-                return;
-            }
-            const index = indexOfNode(containingList, after);
-            if (index < 0) {
-                return;
-            }
-            const end = after.getEnd();
-            if (index !== containingList.length - 1) {
-                // any element except the last one
-                // use next sibling as an anchor
-                const nextToken = getTokenAtPosition(sourceFile, after.end);
-                if (nextToken && isSeparator(after, nextToken)) {
-                    // for list
-                    // a, b, c
-                    // create change for adding 'e' after 'a' as
-                    // - find start of next element after a (it is b)
-                    // - use next element start as start and end position in final change
-                    // - build text of change by formatting the text of node + whitespace trivia of b
-
-                    // in multiline case it will work as
-                    //   a,
-                    //   b,
-                    //   c,
-                    // result - '*' denotes leading trivia that will be inserted after new text (displayed as '#')
-                    //   a,
-                    //   insertedtext<separator>#
-                    // ###b,
-                    //   c,
-                    const nextNode = containingList[index + 1];
-                    const startPos = skipWhitespacesAndLineBreaks(sourceFile.text, nextNode.getFullStart());
-
-                    // write separator and leading trivia of the next element as suffix
-                    const suffix = `${tokenToString(nextToken.kind)}${sourceFile.text.substring(nextToken.end, startPos)}`;
-                    this.insertNodesAt(sourceFile, startPos, [newNode], { suffix });
-                }
-            }
-            else {
-                const afterStart = after.getStart(sourceFile);
-                const afterStartLinePosition = getLineStartPositionForPosition(afterStart, sourceFile);
-
-                let separator: SyntaxKind.CommaToken | SyntaxKind.SemicolonToken | undefined;
-                let multilineList = false;
-
-                // insert element after the last element in the list that has more than one item
-                // pick the element preceding the after element to:
-                // - pick the separator
-                // - determine if list is a multiline
-                if (containingList.length === 1) {
-                    // if list has only one element then we'll format is as multiline if node has comment in trailing trivia, or as singleline otherwise
-                    // i.e. var x = 1 // this is x
-                    //     | new element will be inserted at this position
-                    separator = SyntaxKind.CommaToken;
-                }
-                else {
-                    // element has more than one element, pick separator from the list
-                    const tokenBeforeInsertPosition = findPrecedingToken(after.pos, sourceFile);
-                    separator = isSeparator(after, tokenBeforeInsertPosition) ? tokenBeforeInsertPosition.kind : SyntaxKind.CommaToken;
-                    // determine if list is multiline by checking lines of after element and element that precedes it.
-                    const afterMinusOneStartLinePosition = getLineStartPositionForPosition(containingList[index - 1].getStart(sourceFile), sourceFile);
-                    multilineList = afterMinusOneStartLinePosition !== afterStartLinePosition;
-                }
-                if (hasCommentsBeforeLineBreak(sourceFile.text, after.end)) {
-                    // in this case we'll always treat containing list as multiline
-                    multilineList = true;
-                }
-                if (multilineList) {
-                    // insert separator immediately following the 'after' node to preserve comments in trailing trivia
-                    this.replaceRange(sourceFile, createRange(end), factory.createToken(separator));
-                    // use the same indentation as 'after' item
-                    const indentation = formatting.SmartIndenter.findFirstNonWhitespaceColumn(afterStartLinePosition, afterStart, sourceFile, this.formatContext.options);
-                    // insert element before the line break on the line that contains 'after' element
-                    let insertPos = skipTrivia(sourceFile.text, end, /*stopAfterLineBreak*/ true, /*stopAtComments*/ false);
-                    // find position before "\n" or "\r\n"
-                    while (insertPos !== end && isLineBreak(sourceFile.text.charCodeAt(insertPos - 1))) {
-                        insertPos--;
-                    }
-                    this.replaceRange(sourceFile, createRange(insertPos), newNode, { indentation, prefix: this.newLineCharacter });
-                }
-                else {
-                    this.replaceRange(sourceFile, createRange(end), newNode, { prefix: `${tokenToString(separator)} ` });
-                }
-            }
+        {
+            const text = `
+// comment 1
+var x = 1; // comment 2
+// comment 3
+var y; // comment 4
+var z = 3; // comment 5
+// comment 6
+var a = 4; // comment 7`;
+            runSingleFileTest("insertNodeBefore3", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeBefore(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass());
+            });
+            runSingleFileTest("insertNodeAfterVariableDeclaration", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAfter(sourceFile, findVariableDeclarationContaining("y", sourceFile), createTestVariableDeclaration("z1"));
+            });
         }
-
-        public parenthesizeExpression(sourceFile: SourceFile, expression: Expression) {
-            this.replaceRange(sourceFile, rangeOfNode(expression), factory.createParenthesizedExpression(expression));
-        }
-
-        private finishClassesWithNodesInsertedAtStart(): void {
-            this.classesWithNodesInsertedAtStart.forEach(({ node, sourceFile }) => {
-                const [openBraceEnd, closeBraceEnd] = getClassOrObjectBraceEnds(node, sourceFile);
-                if (openBraceEnd !== undefined && closeBraceEnd !== undefined) {
-                    const isEmpty = getMembersOrProperties(node).length === 0;
-                    const isSingleLine = positionsAreOnSameLine(openBraceEnd, closeBraceEnd, sourceFile);
-                    if (isEmpty && isSingleLine && openBraceEnd !== closeBraceEnd - 1) {
-                        // For `class C { }` remove the whitespace inside the braces.
-                        this.deleteRange(sourceFile, createRange(openBraceEnd, closeBraceEnd - 1));
-                    }
-                    if (isSingleLine) {
-                        this.insertText(sourceFile, closeBraceEnd - 1, this.newLineCharacter);
-                    }
-                }
+        {
+            const text = `
+namespace M {
+    // comment 1
+    var x = 1; // comment 2
+    // comment 3
+    var y; // comment 4
+    var z = 3; // comment 5
+    // comment 6
+    var a = 4; // comment 7
+}`;
+            runSingleFileTest("insertNodeBefore1", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeBefore(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass());
+            });
+            runSingleFileTest("insertNodeBefore2", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeBefore(sourceFile, findChild("M", sourceFile), createTestClass());
+            });
+            runSingleFileTest("insertNodeAfter1", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAfter(sourceFile, findVariableStatementContaining("y", sourceFile), createTestClass());
+            });
+            runSingleFileTest("insertNodeAfter2", /*placeOpenBraceOnNewLineForFunctions*/ true, text, /*validateNodes*/ true, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAfter(sourceFile, findChild("M", sourceFile), createTestClass());
             });
         }
 
-        private finishDeleteDeclarations(): void {
-            const deletedNodesInLists = new Set<Node>(); // Stores nodes in lists that we already deleted. Used to avoid deleting `, ` twice in `a, b`.
-            for (const { sourceFile, node } of this.deletedNodes) {
-                if (!this.deletedNodes.some(d => d.sourceFile === sourceFile && rangeContainsRangeExclusive(d.node, node))) {
-                    if (isArray(node)) {
-                        this.deleteRange(sourceFile, rangeOfTypeParameters(sourceFile, node));
-                    }
-                    else {
-                        deleteDeclaration.deleteDeclaration(this, deletedNodesInLists, sourceFile, node);
-                    }
+        function findConstructor(sourceFile: SourceFile): ConstructorDeclaration {
+            const classDecl = sourceFile.statements[0] as ClassDeclaration;
+            return find<ClassElement, ConstructorDeclaration>(classDecl.members, (m): m is ConstructorDeclaration => isConstructorDeclaration(m) && !!m.body)!;
+        }
+        function createTestSuperCall() {
+            const superCall = factory.createCallExpression(
+                factory.createSuper(),
+                /*typeArguments*/ undefined,
+                /*argumentsArray*/ emptyArray
+            );
+            return factory.createExpressionStatement(superCall);
+        }
+
+        {
+            const text1 = `
+class A {
+    constructor() {
+    }
+}
+`;
+            runSingleFileTest("insertNodeAtConstructorStart", /*placeOpenBraceOnNewLineForFunctions*/ false, text1, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAtConstructorStart(sourceFile, findConstructor(sourceFile), createTestSuperCall());
+            });
+            const text2 = `
+class A {
+    constructor() {
+        var x = 1;
+    }
+}
+`;
+            runSingleFileTest("insertNodeAfter4", /*placeOpenBraceOnNewLineForFunctions*/ false, text2, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAfter(sourceFile, findVariableStatementContaining("x", sourceFile), createTestSuperCall());
+            });
+            const text3 = `
+class A {
+    constructor() {
+
+    }
+}
+`;
+            runSingleFileTest("insertNodeAtConstructorStart-block with newline", /*placeOpenBraceOnNewLineForFunctions*/ false, text3, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeAtConstructorStart(sourceFile, findConstructor(sourceFile), createTestSuperCall());
+            });
+        }
+        {
+            const text = `var a = 1, b = 2, c = 3;`;
+            runSingleFileTest("deleteNodeInList1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList3", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `var a = 1,b = 2,c = 3;`;
+            runSingleFileTest("deleteNodeInList1_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList2_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList3_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+namespace M {
+    var a = 1,
+        b = 2,
+        c = 3;
+}`;
+            runSingleFileTest("deleteNodeInList4", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList5", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList6", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+namespace M {
+    var a = 1, // comment 1
+        // comment 2
+        b = 2, // comment 3
+        // comment 4
+        c = 3; // comment 5
+}`;
+            runSingleFileTest("deleteNodeInList4_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList5_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList6_1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+function foo(a: number, b: string, c = true) {
+    return 1;
+}`;
+            runSingleFileTest("deleteNodeInList7", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList8", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList9", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+function foo(a: number,b: string,c = true) {
+    return 1;
+}`;
+            runSingleFileTest("deleteNodeInList10", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList11", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList12", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+function foo(
+    a: number,
+    b: string,
+    c = true) {
+    return 1;
+}`;
+            runSingleFileTest("deleteNodeInList13", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("a", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList14", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("b", sourceFile));
+            });
+            runSingleFileTest("deleteNodeInList15", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.delete(sourceFile, findChild("c", sourceFile));
+            });
+        }
+        {
+            const text = `
+const x = 1, y = 2;`;
+            runSingleFileTest("insertNodeInListAfter1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+            runSingleFileTest("insertNodeInListAfter2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("y", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+        }
+        {
+            const text = `
+const /*x*/ x = 1, /*y*/ y = 2;`;
+            runSingleFileTest("insertNodeInListAfter3", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+            runSingleFileTest("insertNodeInListAfter4", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("y", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+        }
+        {
+            const text = `
+const x = 1;`;
+            runSingleFileTest("insertNodeInListAfter5", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+        }
+        {
+            const text = `
+const x = 1,
+    y = 2;`;
+            runSingleFileTest("insertNodeInListAfter6", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+            runSingleFileTest("insertNodeInListAfter7", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("y", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+        }
+        {
+            const text = `
+const /*x*/ x = 1,
+    /*y*/ y = 2;`;
+            runSingleFileTest("insertNodeInListAfter8", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+            runSingleFileTest("insertNodeInListAfter9", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("y", sourceFile), factory.createVariableDeclaration("z", /*exclamationToken*/ undefined, /*type*/ undefined, factory.createNumericLiteral(1)));
+            });
+        }
+        {
+            const text = `
+import {
+    x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter10", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, factory.createIdentifier("b"), factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x // this is x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter11", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, factory.createIdentifier("b"), factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter12", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x // this is x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter13", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x0,
+    x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter14", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, factory.createIdentifier("b"), factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x0,
+    x // this is x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter15", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, factory.createIdentifier("b"), factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x0,
+    x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter16", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x0,
+    x // this is x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter17", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier("a")));
+            });
+        }
+        {
+            const text = `
+import {
+    x0, x
+} from "bar"`;
+            runSingleFileTest("insertNodeInListAfter18", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeInListAfter(sourceFile, findChild("x", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier("a")));
+            });
+        }
+        {
+            const runTest = (name: string, text: string) => runSingleFileTest(name, /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                for (const specifier of ["x3", "x4", "x5"]) {
+                    // eslint-disable-next-line boolean-trivia
+                    changeTracker.insertNodeInListAfter(sourceFile, findChild("x2", sourceFile), factory.createImportSpecifier(/*isTypeOnly*/ false, undefined, factory.createIdentifier(specifier)));
                 }
-            }
+            });
 
-            deletedNodesInLists.forEach(node => {
-                const sourceFile = node.getSourceFile();
-                const list = formatting.SmartIndenter.getContainingList(node, sourceFile)!;
-                if (node !== last(list)) return;
+            const crlfText = "import {\r\nx1,\r\nx2\r\n} from \"bar\";";
+            runTest("insertNodeInListAfter19", crlfText);
 
-                const lastNonDeletedIndex = findLastIndex(list, n => !deletedNodesInLists.has(n), list.length - 2);
-                if (lastNonDeletedIndex !== -1) {
-                    this.deleteRange(sourceFile, { pos: list[lastNonDeletedIndex].end, end: startPositionToDeleteNodeInList(sourceFile, list[lastNonDeletedIndex + 1]) });
+            const lfText = "import {\nx1,\nx2\n} from \"bar\";";
+            runTest("insertNodeInListAfter20", lfText);
+        }
+        {
+            const text = `
+class A {
+    x;
+}`;
+            runSingleFileTest("insertNodeAfterMultipleNodes", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNodes = [];
+                for (let i = 0; i < 11 /*error doesn't occur with fewer nodes*/; ++i) {
+                    newNodes.push(
+                        // eslint-disable-next-line boolean-trivia
+                        factory.createPropertyDeclaration(undefined, undefined, i + "", undefined, undefined, undefined));
+                }
+                const insertAfter = findChild("x", sourceFile);
+                for (const newNode of newNodes) {
+                    changeTracker.insertNodeAfter(sourceFile, insertAfter, newNode);
                 }
             });
         }
-
-        /**
-         * Note: after calling this, the TextChanges object must be discarded!
-         * @param validate only for tests
-         *    The reason we must validate as part of this method is that `getNonFormattedText` changes the node's positions,
-         *    so we can only call this once and can't get the non-formatted text separately.
-         */
-        public getChanges(validate?: ValidateNonFormattedText): FileTextChanges[] {
-            this.finishDeleteDeclarations();
-            this.finishClassesWithNodesInsertedAtStart();
-            const changes = changesToText.getTextChangesFromChanges(this.changes, this.newLineCharacter, this.formatContext, validate);
-            for (const { oldFile, fileName, statements } of this.newFiles) {
-                changes.push(changesToText.newFileChanges(oldFile, fileName, statements, this.newLineCharacter, this.formatContext));
-            }
-            return changes;
-        }
-
-        public createNewFile(oldFile: SourceFile | undefined, fileName: string, statements: readonly (Statement | SyntaxKind.NewLineTrivia)[]): void {
-            this.newFiles.push({ oldFile, fileName, statements });
-        }
-    }
-
-    function updateJSDocHost(parent: HasJSDoc): HasJSDoc {
-        if (parent.kind !== SyntaxKind.ArrowFunction) {
-            return parent;
-        }
-        const jsDocNode = parent.parent.kind === SyntaxKind.PropertyDeclaration ?
-            parent.parent as HasJSDoc :
-            parent.parent.parent as HasJSDoc;
-        jsDocNode.jsDoc = parent.jsDoc;
-        jsDocNode.jsDocCache = parent.jsDocCache;
-        return jsDocNode;
-    }
-
-    function tryMergeJsdocTags(oldTag: JSDocTag, newTag: JSDocTag): JSDocTag | undefined {
-        if (oldTag.kind !== newTag.kind) {
-            return undefined;
-        }
-        switch (oldTag.kind) {
-            case SyntaxKind.JSDocParameterTag: {
-                const oldParam = oldTag as JSDocParameterTag;
-                const newParam = newTag as JSDocParameterTag;
-                return isIdentifier(oldParam.name) && isIdentifier(newParam.name) && oldParam.name.escapedText === newParam.name.escapedText
-                    ? factory.createJSDocParameterTag(/*tagName*/ undefined, newParam.name, /*isBracketed*/ false, newParam.typeExpression, newParam.isNameFirst, oldParam.comment)
-                    : undefined;
-            }
-            case SyntaxKind.JSDocReturnTag:
-                return factory.createJSDocReturnTag(/*tagName*/ undefined, (newTag as JSDocReturnTag).typeExpression, oldTag.comment);
-            case SyntaxKind.JSDocTypeTag:
-                return factory.createJSDocTypeTag(/*tagName*/ undefined, (newTag as JSDocTypeTag).typeExpression, oldTag.comment);
-        }
-    }
-
-    // find first non-whitespace position in the leading trivia of the node
-    function startPositionToDeleteNodeInList(sourceFile: SourceFile, node: Node): number {
-        return skipTrivia(sourceFile.text, getAdjustedStartPosition(sourceFile, node, { leadingTriviaOption: LeadingTriviaOption.IncludeAll }), /*stopAfterLineBreak*/ false, /*stopAtComments*/ true);
-    }
-
-    function getClassOrObjectBraceEnds(cls: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression, sourceFile: SourceFile): [number | undefined, number | undefined] {
-        const open = findChildOfKind(cls, SyntaxKind.OpenBraceToken, sourceFile);
-        const close = findChildOfKind(cls, SyntaxKind.CloseBraceToken, sourceFile);
-        return [open?.end, close?.end];
-    }
-    function getMembersOrProperties(node: ClassLikeDeclaration | InterfaceDeclaration | ObjectLiteralExpression | TypeLiteralNode): NodeArray<Node> {
-        return isObjectLiteralExpression(node) ? node.properties : node.members;
-    }
-
-    export type ValidateNonFormattedText = (node: Node, text: string) => void;
-
-    export function getNewFileText(statements: readonly Statement[], scriptKind: ScriptKind, newLineCharacter: string, formatContext: formatting.FormatContext): string {
-        return changesToText.newFileChangesWorker(/*oldFile*/ undefined, scriptKind, statements, newLineCharacter, formatContext);
-    }
-
-    namespace changesToText {
-        export function getTextChangesFromChanges(changes: readonly Change[], newLineCharacter: string, formatContext: formatting.FormatContext, validate: ValidateNonFormattedText | undefined): FileTextChanges[] {
-            return mapDefined(group(changes, c => c.sourceFile.path), changesInFile => {
-                const sourceFile = changesInFile[0].sourceFile;
-                // order changes by start position
-                // If the start position is the same, put the shorter range first, since an empty range (x, x) may precede (x, y) but not vice-versa.
-                const normalized = stableSort(changesInFile, (a, b) => (a.range.pos - b.range.pos) || (a.range.end - b.range.end));
-                // verify that change intervals do not overlap, except possibly at end points.
-                for (let i = 0; i < normalized.length - 1; i++) {
-                    Debug.assert(normalized[i].range.end <= normalized[i + 1].range.pos, "Changes overlap", () =>
-                        `${JSON.stringify(normalized[i].range)} and ${JSON.stringify(normalized[i + 1].range)}`);
-                }
-
-                const textChanges = mapDefined(normalized, c => {
-                    const span = createTextSpanFromRange(c.range);
-                    const newText = computeNewText(c, sourceFile, newLineCharacter, formatContext, validate);
-
-                    // Filter out redundant changes.
-                    if (span.length === newText.length && stringContainsAt(sourceFile.text, newText, span.start)) {
-                        return undefined;
-                    }
-
-                    return createTextChange(span, newText);
-                });
-
-                return textChanges.length > 0 ? { fileName: sourceFile.fileName, textChanges } : undefined;
+        {
+            const text = `
+class A {
+    x
+}
+`;
+            runSingleFileTest("insertNodeAfterInClass1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), factory.createPropertyDeclaration(undefined, undefined, "a", undefined, factory.createKeywordTypeNode(SyntaxKind.BooleanKeyword), undefined));
             });
         }
-
-        export function newFileChanges(oldFile: SourceFile | undefined, fileName: string, statements: readonly (Statement | SyntaxKind.NewLineTrivia)[], newLineCharacter: string, formatContext: formatting.FormatContext): FileTextChanges {
-            const text = newFileChangesWorker(oldFile, getScriptKindFromFileName(fileName), statements, newLineCharacter, formatContext);
-            return { fileName, textChanges: [createTextChange(createTextSpan(0, 0), text)], isNewFile: true };
+        {
+            const text = `
+class A {
+    x;
+}
+`;
+            runSingleFileTest("insertNodeAfterInClass2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                // eslint-disable-next-line boolean-trivia
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), factory.createPropertyDeclaration(undefined, undefined, "a", undefined, factory.createKeywordTypeNode(SyntaxKind.BooleanKeyword), undefined));
+            });
         }
-
-        export function newFileChangesWorker(oldFile: SourceFile | undefined, scriptKind: ScriptKind, statements: readonly (Statement | SyntaxKind.NewLineTrivia)[], newLineCharacter: string, formatContext: formatting.FormatContext): string {
-            // TODO: this emits the file, parses it back, then formats it that -- may be a less roundabout way to do this
-            const nonFormattedText = statements.map(s => s === SyntaxKind.NewLineTrivia ? "" : getNonformattedText(s, oldFile, newLineCharacter).text).join(newLineCharacter);
-            const sourceFile = createSourceFile("any file name", nonFormattedText, ScriptTarget.ESNext, /*setParentNodes*/ true, scriptKind);
-            const changes = formatting.formatDocument(sourceFile, formatContext);
-            return applyChanges(nonFormattedText, changes) + newLineCharacter;
+        {
+            const text = `
+class A {
+    x;
+    y = 1;
+}
+`;
+            runSingleFileTest("deleteNodeAfterInClass1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findChild("x", sourceFile));
+            });
         }
-
-        function computeNewText(change: Change, sourceFile: SourceFile, newLineCharacter: string, formatContext: formatting.FormatContext, validate: ValidateNonFormattedText | undefined): string {
-            if (change.kind === ChangeKind.Remove) {
-                return "";
-            }
-            if (change.kind === ChangeKind.Text) {
-                return change.text;
-            }
-
-            const { options = {}, range: { pos } } = change;
-            const format = (n: Node) => getFormattedTextOfNode(n, sourceFile, pos, options, newLineCharacter, formatContext, validate);
-            const text = change.kind === ChangeKind.ReplaceWithMultipleNodes
-                ? change.nodes.map(n => removeSuffix(format(n), newLineCharacter)).join(change.options?.joiner || newLineCharacter)
-                : format(change.node);
-            // strip initial indentation (spaces or tabs) if text will be inserted in the middle of the line
-            const noIndent = (options.indentation !== undefined || getLineStartPositionForPosition(pos, sourceFile) === pos) ? text : text.replace(/^\s+/, "");
-            return (options.prefix || "") + noIndent
-                 + ((!options.suffix || endsWith(noIndent, options.suffix))
-                    ? "" : options.suffix);
+        {
+            const text = `
+class A {
+    x
+    y = 1;
+}
+`;
+            runSingleFileTest("deleteNodeAfterInClass2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                deleteNode(changeTracker, sourceFile, findChild("x", sourceFile));
+            });
         }
-
-        /** Note: this may mutate `nodeIn`. */
-        function getFormattedTextOfNode(nodeIn: Node, sourceFile: SourceFile, pos: number, { indentation, prefix, delta }: InsertNodeOptions, newLineCharacter: string, formatContext: formatting.FormatContext, validate: ValidateNonFormattedText | undefined): string {
-            const { node, text } = getNonformattedText(nodeIn, sourceFile, newLineCharacter);
-            if (validate) validate(node, text);
-            const formatOptions = getFormatCodeSettingsForWriting(formatContext, sourceFile);
-            const initialIndentation =
-                indentation !== undefined
-                    ? indentation
-                    : formatting.SmartIndenter.getIndentation(pos, sourceFile, formatOptions, prefix === newLineCharacter || getLineStartPositionForPosition(pos, sourceFile) === pos);
-            if (delta === undefined) {
-                delta = formatting.SmartIndenter.shouldIndentChildNode(formatOptions, nodeIn) ? (formatOptions.indentSize || 0) : 0;
-            }
-
-            const file: SourceFileLike = {
-                text,
-                getLineAndCharacterOfPosition(pos) {
-                    return getLineAndCharacterOfPosition(this, pos);
-                }
-            };
-            const changes = formatting.formatNodeGivenIndentation(node, file, sourceFile.languageVariant, initialIndentation, delta, { ...formatContext, options: formatOptions });
-            return applyChanges(text, changes);
+        {
+            const text = `
+class A {
+    x = foo
+}
+`;
+            runSingleFileTest("insertNodeInClassAfterNodeWithoutSeparator1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = factory.createPropertyDeclaration(
+                    /*decorators*/ undefined,
+                    /*modifiers*/ undefined,
+                    factory.createComputedPropertyName(factory.createNumericLiteral(1)),
+                    /*questionToken*/ undefined,
+                    factory.createKeywordTypeNode(SyntaxKind.AnyKeyword),
+                    /*initializer*/ undefined);
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), newNode);
+            });
         }
-
-        /** Note: output node may be mutated input node. */
-        export function getNonformattedText(node: Node, sourceFile: SourceFile | undefined, newLineCharacter: string): { text: string, node: Node } {
-            const writer = createWriter(newLineCharacter);
-            const newLine = getNewLineKind(newLineCharacter);
-            createPrinter({
-                newLine,
-                neverAsciiEscape: true,
-                preserveSourceNewlines: true,
-                terminateUnterminatedLiterals: true
-            }, writer).writeNode(EmitHint.Unspecified, node, sourceFile, writer);
-            return { text: writer.getText(), node: assignPositionsToNode(node) };
-        }
+        {
+            const text = `
+class A {
+    x() {
     }
-
-    export function applyChanges(text: string, changes: readonly TextChange[]): string {
-        for (let i = changes.length - 1; i >= 0; i--) {
-            const { span, newText } = changes[i];
-            text = `${text.substring(0, span.start)}${newText}${text.substring(textSpanEnd(span))}`;
+}
+`;
+            runSingleFileTest("insertNodeInClassAfterNodeWithoutSeparator2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = factory.createPropertyDeclaration(
+                    /*decorators*/ undefined,
+                    /*modifiers*/ undefined,
+                    factory.createComputedPropertyName(factory.createNumericLiteral(1)),
+                    /*questionToken*/ undefined,
+                    factory.createKeywordTypeNode(SyntaxKind.AnyKeyword),
+                    /*initializer*/ undefined);
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), newNode);
+            });
         }
-        return text;
-    }
-
-    function isTrivia(s: string) {
-        return skipTrivia(s, 0) === s.length;
-    }
-
-    // A transformation context that won't perform parenthesization, as some parenthesization rules
-    // are more aggressive than is strictly necessary.
-    const textChangesTransformationContext: TransformationContext = {
-        ...nullTransformationContext,
-        factory: createNodeFactory(
-            nullTransformationContext.factory.flags | NodeFactoryFlags.NoParenthesizerRules,
-            nullTransformationContext.factory.baseFactory),
-    };
-
-    export function assignPositionsToNode(node: Node): Node {
-        const visited = visitEachChild(node, assignPositionsToNode, textChangesTransformationContext, assignPositionsToNodeArray, assignPositionsToNode);
-        // create proxy node for non synthesized nodes
-        const newNode = nodeIsSynthesized(visited) ? visited : Object.create(visited) as Node;
-        setTextRangePosEnd(newNode, getPos(node), getEnd(node));
-        return newNode;
-    }
-
-    function assignPositionsToNodeArray(nodes: NodeArray<any>, visitor: Visitor, test?: (node: Node) => boolean, start?: number, count?: number) {
-        const visited = visitNodes(nodes, visitor, test, start, count);
-        if (!visited) {
-            return visited;
+        {
+            const text = `
+interface A {
+    x
+}
+`;
+            runSingleFileTest("insertNodeInInterfaceAfterNodeWithoutSeparator1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = factory.createPropertyDeclaration(
+                    /*decorators*/ undefined,
+                    /*modifiers*/ undefined,
+                    factory.createComputedPropertyName(factory.createNumericLiteral(1)),
+                    /*questionToken*/ undefined,
+                    factory.createKeywordTypeNode(SyntaxKind.AnyKeyword),
+                    /*initializer*/ undefined);
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), newNode);
+            });
         }
-        // clone nodearray if necessary
-        const nodeArray = visited === nodes ? factory.createNodeArray(visited.slice(0)) : visited;
-        setTextRangePosEnd(nodeArray, getPos(nodes), getEnd(nodes));
-        return nodeArray;
-    }
-
-    interface TextChangesWriter extends EmitTextWriter, PrintHandlers {}
-
-    export function createWriter(newLine: string): TextChangesWriter {
-        let lastNonTriviaPosition = 0;
-
-        const writer = createTextWriter(newLine);
-        const onBeforeEmitNode: PrintHandlers["onBeforeEmitNode"] = node => {
-            if (node) {
-                setPos(node, lastNonTriviaPosition);
-            }
-        };
-        const onAfterEmitNode: PrintHandlers["onAfterEmitNode"] = node => {
-            if (node) {
-                setEnd(node, lastNonTriviaPosition);
-            }
-        };
-        const onBeforeEmitNodeArray: PrintHandlers["onBeforeEmitNodeArray"] = nodes => {
-            if (nodes) {
-                setPos(nodes, lastNonTriviaPosition);
-            }
-        };
-        const onAfterEmitNodeArray: PrintHandlers["onAfterEmitNodeArray"] = nodes => {
-            if (nodes) {
-                setEnd(nodes, lastNonTriviaPosition);
-            }
-        };
-        const onBeforeEmitToken: PrintHandlers["onBeforeEmitToken"] = node => {
-            if (node) {
-                setPos(node, lastNonTriviaPosition);
-            }
-        };
-        const onAfterEmitToken: PrintHandlers["onAfterEmitToken"] = node => {
-            if (node) {
-                setEnd(node, lastNonTriviaPosition);
-            }
-        };
-
-        function setLastNonTriviaPosition(s: string, force: boolean) {
-            if (force || !isTrivia(s)) {
-                lastNonTriviaPosition = writer.getTextPos();
-                let i = 0;
-                while (isWhiteSpaceLike(s.charCodeAt(s.length - i - 1))) {
-                    i++;
-                }
-                // trim trailing whitespaces
-                lastNonTriviaPosition -= i;
-            }
+        {
+            const text = `
+interface A {
+    x()
+}
+`;
+            runSingleFileTest("insertNodeInInterfaceAfterNodeWithoutSeparator2", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = factory.createPropertyDeclaration(
+                    /*decorators*/ undefined,
+                    /*modifiers*/ undefined,
+                    factory.createComputedPropertyName(factory.createNumericLiteral(1)),
+                    /*questionToken*/ undefined,
+                    factory.createKeywordTypeNode(SyntaxKind.AnyKeyword),
+                    /*initializer*/ undefined);
+                changeTracker.insertNodeAfter(sourceFile, findChild("x", sourceFile), newNode);
+            });
         }
-
-        function write(s: string): void {
-            writer.write(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
+        {
+            const text = `
+let x = foo
+`;
+            runSingleFileTest("insertNodeInStatementListAfterNodeWithoutSeparator1", /*placeOpenBraceOnNewLineForFunctions*/ false, text, /*validateNodes*/ false, (sourceFile, changeTracker) => {
+                const newNode = factory.createExpressionStatement(factory.createParenthesizedExpression(factory.createNumericLiteral(1)));
+                changeTracker.insertNodeAfter(sourceFile, findVariableStatementContaining("x", sourceFile), newNode);
+            });
         }
-        function writeComment(s: string): void {
-            writer.writeComment(s);
-        }
-        function writeKeyword(s: string): void {
-            writer.writeKeyword(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeOperator(s: string): void {
-            writer.writeOperator(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writePunctuation(s: string): void {
-            writer.writePunctuation(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeTrailingSemicolon(s: string): void {
-            writer.writeTrailingSemicolon(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeParameter(s: string): void {
-            writer.writeParameter(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeProperty(s: string): void {
-            writer.writeProperty(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeSpace(s: string): void {
-            writer.writeSpace(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeStringLiteral(s: string): void {
-            writer.writeStringLiteral(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeSymbol(s: string, sym: Symbol): void {
-            writer.writeSymbol(s, sym);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeLine(force?: boolean): void {
-            writer.writeLine(force);
-        }
-        function increaseIndent(): void {
-            writer.increaseIndent();
-        }
-        function decreaseIndent(): void {
-            writer.decreaseIndent();
-        }
-        function getText(): string {
-            return writer.getText();
-        }
-        function rawWrite(s: string): void {
-            writer.rawWrite(s);
-            setLastNonTriviaPosition(s, /*force*/ false);
-        }
-        function writeLiteral(s: string): void {
-            writer.writeLiteral(s);
-            setLastNonTriviaPosition(s, /*force*/ true);
-        }
-        function getTextPos(): number {
-            return writer.getTextPos();
-        }
-        function getLine(): number {
-            return writer.getLine();
-        }
-        function getColumn(): number {
-            return writer.getColumn();
-        }
-        function getIndent(): number {
-            return writer.getIndent();
-        }
-        function isAtStartOfLine(): boolean {
-            return writer.isAtStartOfLine();
-        }
-        function clear(): void {
-            writer.clear();
-            lastNonTriviaPosition = 0;
-        }
-
-        return {
-            onBeforeEmitNode,
-            onAfterEmitNode,
-            onBeforeEmitNodeArray,
-            onAfterEmitNodeArray,
-            onBeforeEmitToken,
-            onAfterEmitToken,
-            write,
-            writeComment,
-            writeKeyword,
-            writeOperator,
-            writePunctuation,
-            writeTrailingSemicolon,
-            writeParameter,
-            writeProperty,
-            writeSpace,
-            writeStringLiteral,
-            writeSymbol,
-            writeLine,
-            increaseIndent,
-            decreaseIndent,
-            getText,
-            rawWrite,
-            writeLiteral,
-            getTextPos,
-            getLine,
-            getColumn,
-            getIndent,
-            isAtStartOfLine,
-            hasTrailingComment: () => writer.hasTrailingComment(),
-            hasTrailingWhitespace: () => writer.hasTrailingWhitespace(),
-            clear
-        };
-    }
-
-    function getInsertionPositionAtSourceFileTop(sourceFile: SourceFile): number {
-        let lastPrologue: PrologueDirective | undefined;
-        for (const node of sourceFile.statements) {
-            if (isPrologueDirective(node)) {
-                lastPrologue = node;
-            }
-            else {
-                break;
-            }
-        }
-
-        let position = 0;
-        const text = sourceFile.text;
-        if (lastPrologue) {
-            position = lastPrologue.end;
-            advancePastLineBreak();
-            return position;
-        }
-
-        const shebang = getShebang(text);
-        if (shebang !== undefined) {
-            position = shebang.length;
-            advancePastLineBreak();
-        }
-
-        const ranges = getLeadingCommentRanges(text, position);
-        if (!ranges) return position;
-
-        // Find the first attached comment to the first node and add before it
-        let lastComment: { range: CommentRange; pinnedOrTripleSlash: boolean; } | undefined;
-        let firstNodeLine: number | undefined;
-        for (const range of ranges) {
-            if (range.kind === SyntaxKind.MultiLineCommentTrivia) {
-                if (isPinnedComment(text, range.pos)) {
-                    lastComment = { range, pinnedOrTripleSlash: true };
-                    continue;
-                }
-            }
-            else if (isRecognizedTripleSlashComment(text, range.pos, range.end)) {
-                lastComment = { range, pinnedOrTripleSlash: true };
-                continue;
-            }
-
-            if (lastComment) {
-                // Always insert after pinned or triple slash comments
-                if (lastComment.pinnedOrTripleSlash) break;
-
-                // There was a blank line between the last comment and this comment.
-                // This comment is not part of the copyright comments
-                const commentLine = sourceFile.getLineAndCharacterOfPosition(range.pos).line;
-                const lastCommentEndLine = sourceFile.getLineAndCharacterOfPosition(lastComment.range.end).line;
-                if (commentLine >= lastCommentEndLine + 2) break;
-            }
-
-            if (sourceFile.statements.length) {
-                if (firstNodeLine === undefined) firstNodeLine = sourceFile.getLineAndCharacterOfPosition(sourceFile.statements[0].getStart()).line;
-                const commentEndLine = sourceFile.getLineAndCharacterOfPosition(range.end).line;
-                if (firstNodeLine < commentEndLine + 2) break;
-            }
-            lastComment = { range, pinnedOrTripleSlash: false };
-        }
-
-        if (lastComment) {
-            position = lastComment.range.end;
-            advancePastLineBreak();
-        }
-        return position;
-
-        function advancePastLineBreak() {
-            if (position < text.length) {
-                const charCode = text.charCodeAt(position);
-                if (isLineBreak(charCode)) {
-                    position++;
-
-                    if (position < text.length && charCode === CharacterCodes.carriageReturn && text.charCodeAt(position) === CharacterCodes.lineFeed) {
-                        position++;
-                    }
-                }
-            }
-        }
-    }
-
-    export function isValidLocationToAddComment(sourceFile: SourceFile, position: number) {
-        return !isInComment(sourceFile, position) && !isInString(sourceFile, position) && !isInTemplateString(sourceFile, position) && !isInJSXText(sourceFile, position);
-    }
-
-    function needSemicolonBetween(a: Node, b: Node): boolean {
-        return (isPropertySignature(a) || isPropertyDeclaration(a)) && isClassOrTypeElement(b) && b.name!.kind === SyntaxKind.ComputedPropertyName
-            || isStatementButNotDeclaration(a) && isStatementButNotDeclaration(b); // TODO: only if b would start with a `(` or `[`
-    }
-
-    namespace deleteDeclaration {
-        export function deleteDeclaration(changes: ChangeTracker, deletedNodesInLists: Set<Node>, sourceFile: SourceFile, node: Node): void {
-            switch (node.kind) {
-                case SyntaxKind.Parameter: {
-                    const oldFunction = node.parent;
-                    if (isArrowFunction(oldFunction) &&
-                        oldFunction.parameters.length === 1 &&
-                        !findChildOfKind(oldFunction, SyntaxKind.OpenParenToken, sourceFile)) {
-                        // Lambdas with exactly one parameter are special because, after removal, there
-                        // must be an empty parameter list (i.e. `()`) and this won't necessarily be the
-                        // case if the parameter is simply removed (e.g. in `x => 1`).
-                        changes.replaceNodeWithText(sourceFile, node, "()");
-                    }
-                    else {
-                        deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                    }
-                    break;
-                }
-
-                case SyntaxKind.ImportDeclaration:
-                case SyntaxKind.ImportEqualsDeclaration:
-                    const isFirstImport = sourceFile.imports.length && node === first(sourceFile.imports).parent || node === find(sourceFile.statements, isAnyImportSyntax);
-                    // For first import, leave header comment in place, otherwise only delete JSDoc comments
-                    deleteNode(changes, sourceFile, node, {
-                        leadingTriviaOption: isFirstImport ? LeadingTriviaOption.Exclude : hasJSDocNodes(node) ? LeadingTriviaOption.JSDoc : LeadingTriviaOption.StartLine,
-                    });
-                    break;
-
-                case SyntaxKind.BindingElement:
-                    const pattern = (node as BindingElement).parent;
-                    const preserveComma = pattern.kind === SyntaxKind.ArrayBindingPattern && node !== last(pattern.elements);
-                    if (preserveComma) {
-                        deleteNode(changes, sourceFile, node);
-                    }
-                    else {
-                        deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                    }
-                    break;
-
-                case SyntaxKind.VariableDeclaration:
-                    deleteVariableDeclaration(changes, deletedNodesInLists, sourceFile, node as VariableDeclaration);
-                    break;
-
-                case SyntaxKind.TypeParameter:
-                    deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                    break;
-
-                case SyntaxKind.ImportSpecifier:
-                    const namedImports = (node as ImportSpecifier).parent;
-                    if (namedImports.elements.length === 1) {
-                        deleteImportBinding(changes, sourceFile, namedImports);
-                    }
-                    else {
-                        deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                    }
-                    break;
-
-                case SyntaxKind.NamespaceImport:
-                    deleteImportBinding(changes, sourceFile, node as NamespaceImport);
-                    break;
-
-                case SyntaxKind.SemicolonToken:
-                    deleteNode(changes, sourceFile, node, { trailingTriviaOption: TrailingTriviaOption.Exclude });
-                    break;
-
-                case SyntaxKind.FunctionKeyword:
-                    deleteNode(changes, sourceFile, node, { leadingTriviaOption: LeadingTriviaOption.Exclude });
-                    break;
-
-                case SyntaxKind.ClassDeclaration:
-                case SyntaxKind.FunctionDeclaration:
-                    deleteNode(changes, sourceFile, node, { leadingTriviaOption: hasJSDocNodes(node) ? LeadingTriviaOption.JSDoc : LeadingTriviaOption.StartLine });
-                    break;
-
-                default:
-                    if (!node.parent) {
-                        // a misbehaving client can reach here with the SourceFile node
-                        deleteNode(changes, sourceFile, node);
-                    }
-                    else if (isImportClause(node.parent) && node.parent.name === node) {
-                        deleteDefaultImport(changes, sourceFile, node.parent);
-                    }
-                    else if (isCallExpression(node.parent) && contains(node.parent.arguments, node)) {
-                        deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                    }
-                    else {
-                        deleteNode(changes, sourceFile, node);
-                    }
-            }
-        }
-
-        function deleteDefaultImport(changes: ChangeTracker, sourceFile: SourceFile, importClause: ImportClause): void {
-            if (!importClause.namedBindings) {
-                // Delete the whole import
-                deleteNode(changes, sourceFile, importClause.parent);
-            }
-            else {
-                // import |d,| * as ns from './file'
-                const start = importClause.name!.getStart(sourceFile);
-                const nextToken = getTokenAtPosition(sourceFile, importClause.name!.end);
-                if (nextToken && nextToken.kind === SyntaxKind.CommaToken) {
-                    // shift first non-whitespace position after comma to the start position of the node
-                    const end = skipTrivia(sourceFile.text, nextToken.end, /*stopAfterLineBreaks*/ false, /*stopAtComments*/ true);
-                    changes.deleteRange(sourceFile, { pos: start, end });
-                }
-                else {
-                    deleteNode(changes, sourceFile, importClause.name!);
-                }
-            }
-        }
-
-        function deleteImportBinding(changes: ChangeTracker, sourceFile: SourceFile, node: NamedImportBindings): void {
-            if (node.parent.name) {
-                // Delete named imports while preserving the default import
-                // import d|, * as ns| from './file'
-                // import d|, { a }| from './file'
-                const previousToken = Debug.checkDefined(getTokenAtPosition(sourceFile, node.pos - 1));
-                changes.deleteRange(sourceFile, { pos: previousToken.getStart(sourceFile), end: node.end });
-            }
-            else {
-                // Delete the entire import declaration
-                // |import * as ns from './file'|
-                // |import { a } from './file'|
-                const importDecl = getAncestor(node, SyntaxKind.ImportDeclaration)!;
-                deleteNode(changes, sourceFile, importDecl);
-            }
-        }
-
-        function deleteVariableDeclaration(changes: ChangeTracker, deletedNodesInLists: Set<Node>, sourceFile: SourceFile, node: VariableDeclaration): void {
-            const { parent } = node;
-
-            if (parent.kind === SyntaxKind.CatchClause) {
-                // TODO: There's currently no unused diagnostic for this, could be a suggestion
-                changes.deleteNodeRange(sourceFile, findChildOfKind(parent, SyntaxKind.OpenParenToken, sourceFile)!, findChildOfKind(parent, SyntaxKind.CloseParenToken, sourceFile)!);
-                return;
-            }
-
-            if (parent.declarations.length !== 1) {
-                deleteNodeInList(changes, deletedNodesInLists, sourceFile, node);
-                return;
-            }
-
-            const gp = parent.parent;
-            switch (gp.kind) {
-                case SyntaxKind.ForOfStatement:
-                case SyntaxKind.ForInStatement:
-                    changes.replaceNode(sourceFile, node, factory.createObjectLiteralExpression());
-                    break;
-
-                case SyntaxKind.ForStatement:
-                    deleteNode(changes, sourceFile, parent);
-                    break;
-
-                case SyntaxKind.VariableStatement:
-                    deleteNode(changes, sourceFile, gp, { leadingTriviaOption: hasJSDocNodes(gp) ? LeadingTriviaOption.JSDoc : LeadingTriviaOption.StartLine });
-                    break;
-
-                default:
-                    Debug.assertNever(gp);
-            }
-        }
-    }
-
-    /** Warning: This deletes comments too. See `copyComments` in `convertFunctionToEs6Class`. */
-    // Exported for tests only! (TODO: improve tests to not need this)
-    export function deleteNode(changes: ChangeTracker, sourceFile: SourceFile, node: Node, options: ConfigurableStartEnd = { leadingTriviaOption: LeadingTriviaOption.IncludeAll }): void {
-        const startPosition = getAdjustedStartPosition(sourceFile, node, options);
-        const endPosition = getAdjustedEndPosition(sourceFile, node, options);
-        changes.deleteRange(sourceFile, { pos: startPosition, end: endPosition });
-    }
-
-    function deleteNodeInList(changes: ChangeTracker, deletedNodesInLists: Set<Node>, sourceFile: SourceFile, node: Node): void {
-        const containingList = Debug.checkDefined(formatting.SmartIndenter.getContainingList(node, sourceFile));
-        const index = indexOfNode(containingList, node);
-        Debug.assert(index !== -1);
-        if (containingList.length === 1) {
-            deleteNode(changes, sourceFile, node);
-            return;
-        }
-
-        // Note: We will only delete a comma *after* a node. This will leave a trailing comma if we delete the last node.
-        // That's handled in the end by `finishTrailingCommaAfterDeletingNodesInList`.
-        Debug.assert(!deletedNodesInLists.has(node), "Deleting a node twice");
-        deletedNodesInLists.add(node);
-        changes.deleteRange(sourceFile, {
-            pos: startPositionToDeleteNodeInList(sourceFile, node),
-            end: index === containingList.length - 1 ? getAdjustedEndPosition(sourceFile, node, {}) : startPositionToDeleteNodeInList(sourceFile, containingList[index + 1]),
-        });
-    }
+    });
 }

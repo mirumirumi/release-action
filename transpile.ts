@@ -1,153 +1,489 @@
 namespace ts {
-    export interface TranspileOptions {
-        compilerOptions?: CompilerOptions;
-        fileName?: string;
-        reportDiagnostics?: boolean;
-        moduleName?: string;
-        renamedDependencies?: MapLike<string>;
-        transformers?: CustomTransformers;
-    }
+    describe("unittests:: services:: Transpile", () => {
 
-    export interface TranspileOutput {
-        outputText: string;
-        diagnostics?: Diagnostic[];
-        sourceMapText?: string;
-    }
+        interface TranspileTestSettings {
+            options?: TranspileOptions;
+            noSetFileName?: boolean;
+        }
 
-    /*
-     * This function will compile source text from 'input' argument using specified compiler options.
-     * If not options are provided - it will use a set of default compiler options.
-     * Extra compiler options that will unconditionally be used by this function are:
-     * - isolatedModules = true
-     * - allowNonTsExtensions = true
-     * - noLib = true
-     * - noResolve = true
-     */
-    export function transpileModule(input: string, transpileOptions: TranspileOptions): TranspileOutput {
-        const diagnostics: Diagnostic[] = [];
+        function transpilesCorrectly(name: string, input: string, testSettings: TranspileTestSettings) {
+            describe(name, () => {
+                let transpileResult: TranspileOutput;
+                let oldTranspileResult: string;
+                let oldTranspileDiagnostics: Diagnostic[];
 
-        const options: CompilerOptions = transpileOptions.compilerOptions ? fixupCompilerOptions(transpileOptions.compilerOptions, diagnostics) : {};
+                const transpileOptions: TranspileOptions = testSettings.options || {};
+                if (!transpileOptions.compilerOptions) {
+                    transpileOptions.compilerOptions = { };
+                }
+                if (transpileOptions.compilerOptions.target === undefined) {
+                    transpileOptions.compilerOptions.target = ScriptTarget.ES3;
+                }
 
-        // mix in default options
-        const defaultOptions = getDefaultCompilerOptions();
-        for (const key in defaultOptions) {
-            if (hasProperty(defaultOptions, key) && options[key] === undefined) {
-                options[key] = defaultOptions[key];
+                if (transpileOptions.compilerOptions.newLine === undefined) {
+                    // use \r\n as default new line
+                    transpileOptions.compilerOptions.newLine = NewLineKind.CarriageReturnLineFeed;
+                }
+
+                transpileOptions.compilerOptions.sourceMap = true;
+
+                let unitName = transpileOptions.fileName;
+                if (!unitName) {
+                    unitName = transpileOptions.compilerOptions.jsx ? "file.tsx" : "file.ts";
+                    if (!testSettings.noSetFileName) {
+                        transpileOptions.fileName = unitName;
+                    }
+                }
+
+                transpileOptions.reportDiagnostics = true;
+
+                const justName = "transpile/" + name.replace(/[^a-z0-9\-. ]/ig, "") + (transpileOptions.compilerOptions.jsx ? Extension.Tsx : Extension.Ts);
+                const toBeCompiled = [{
+                    unitName,
+                    content: input
+                }];
+                const canUseOldTranspile = !transpileOptions.renamedDependencies;
+
+                before(() => {
+                    transpileResult = transpileModule(input, transpileOptions);
+
+                    if (canUseOldTranspile) {
+                        oldTranspileDiagnostics = [];
+                        oldTranspileResult = transpile(input, transpileOptions.compilerOptions, transpileOptions.fileName, oldTranspileDiagnostics, transpileOptions.moduleName);
+                    }
+                });
+
+                after(() => {
+                    transpileResult = undefined!;
+                    oldTranspileResult = undefined!;
+                    oldTranspileDiagnostics = undefined!;
+                });
+
+                /* eslint-disable no-null/no-null */
+                it("Correct errors for " + justName, () => {
+                    Harness.Baseline.runBaseline(justName.replace(/\.tsx?$/, ".errors.txt"),
+                        transpileResult.diagnostics!.length === 0 ? null : Harness.Compiler.getErrorBaseline(toBeCompiled, transpileResult.diagnostics!));
+                });
+
+                if (canUseOldTranspile) {
+                    it("Correct errors (old transpile) for " + justName, () => {
+                        Harness.Baseline.runBaseline(justName.replace(/\.tsx?$/, ".oldTranspile.errors.txt"),
+                            oldTranspileDiagnostics.length === 0 ? null : Harness.Compiler.getErrorBaseline(toBeCompiled, oldTranspileDiagnostics));
+                    });
+                }
+                /* eslint-enable no-null/no-null */
+
+                it("Correct output for " + justName, () => {
+                    Harness.Baseline.runBaseline(justName.replace(/\.tsx?$/, Extension.Js), transpileResult.outputText);
+                });
+
+                if (canUseOldTranspile) {
+                    it("Correct output (old transpile) for " + justName, () => {
+                        Harness.Baseline.runBaseline(justName.replace(/\.tsx?$/, ".oldTranspile.js"), oldTranspileResult);
+                    });
+                }
+            });
+        }
+
+        transpilesCorrectly("Generates no diagnostics with valid inputs", `var x = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Generates no diagnostics for missing file references", `/// <reference path="file2.ts" />
+var x = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Generates no diagnostics for missing module imports", `import {a} from "module2";`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Generates expected syntactic diagnostics", `a b`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Does not generate semantic diagnostics", `var x: string = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Generates module output", `var x = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.AMD } }
+        });
+
+        transpilesCorrectly("Uses correct newLine character", `var x = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS, newLine: NewLineKind.LineFeed } }
+        });
+
+        transpilesCorrectly("Sets module name", "var x = 1;", {
+            options: { compilerOptions: { module: ModuleKind.System, newLine: NewLineKind.LineFeed }, moduleName: "NamedModule" }
+        });
+
+        transpilesCorrectly("No extra errors for file without extension", `"use strict";\r\nvar x = 0;`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS }, fileName: "file" }
+        });
+
+        transpilesCorrectly("Rename dependencies - System",
+            `import {foo} from "SomeName";\n` +
+            `declare function use(a: any);\n` +
+            `use(foo);`, {
+                options: { compilerOptions: { module: ModuleKind.System, newLine: NewLineKind.LineFeed }, renamedDependencies: { SomeName: "SomeOtherName" } }
+            });
+
+        transpilesCorrectly("Rename dependencies - AMD",
+            `import {foo} from "SomeName";\n` +
+            `declare function use(a: any);\n` +
+            `use(foo);`, {
+                options: { compilerOptions: { module: ModuleKind.AMD, newLine: NewLineKind.LineFeed }, renamedDependencies: { SomeName: "SomeOtherName" } }
+            });
+
+        transpilesCorrectly("Rename dependencies - UMD",
+            `import {foo} from "SomeName";\n` +
+            `declare function use(a: any);\n` +
+            `use(foo);`, {
+                options: { compilerOptions: { module: ModuleKind.UMD, newLine: NewLineKind.LineFeed }, renamedDependencies: { SomeName: "SomeOtherName" } }
+            });
+
+        transpilesCorrectly("Transpile with emit decorators and emit metadata",
+            `import {db} from './db';\n` +
+            `function someDecorator(target) {\n` +
+            `    return target;\n` +
+            `} \n` +
+            `@someDecorator\n` +
+            `class MyClass {\n` +
+            `    db: db;\n` +
+            `    constructor(db: db) {\n` +
+            `        this.db = db;\n` +
+            `        this.db.doSomething(); \n` +
+            `    }\n` +
+            `}\n` +
+            `export {MyClass}; \n`, {
+                options: {
+                    compilerOptions: {
+                        module: ModuleKind.CommonJS,
+                        newLine: NewLineKind.LineFeed,
+                        noEmitHelpers: true,
+                        emitDecoratorMetadata: true,
+                        experimentalDecorators: true,
+                        target: ScriptTarget.ES5,
+                    }
+                }
+            });
+
+        transpilesCorrectly("Supports backslashes in file name", "var x", {
+            options: { fileName: "a\\b.ts" }
+        });
+
+        transpilesCorrectly("transpile file as 'tsx' if 'jsx' is specified", `var x = <div/>`, {
+            options: { compilerOptions: { jsx: JsxEmit.React, newLine: NewLineKind.LineFeed } }
+        });
+
+        transpilesCorrectly("transpile .js files", "const a = 10;", {
+            options: { compilerOptions: { newLine: NewLineKind.LineFeed, module: ModuleKind.CommonJS }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports urls in file name", "var x", {
+            options: { fileName: "http://somewhere/directory//directory2/file.ts" }
+        });
+
+        transpilesCorrectly("Accepts string as enum values for compile-options", "export const x = 0", {
+            options: {
+                compilerOptions: {
+                    module: "es6" as any as ModuleKind,
+                    // Capitalization and spaces ignored
+                    target: " Es6 " as any as ScriptTarget
+                }
             }
-        }
+        });
 
-        for (const option of transpileOptionValueCompilerOptions) {
-            options[option.name] = option.transpileOptionValue;
-        }
+        transpilesCorrectly("Report an error when compiler-options module-kind is out-of-range", "", {
+            options: { compilerOptions: { module: 123 as any as ModuleKind } }
+        });
 
-        // transpileModule does not write anything to disk so there is no need to verify that there are no conflicts between input and output paths.
-        options.suppressOutputPathCheck = true;
+        transpilesCorrectly("Report an error when compiler-options target-script is out-of-range", "", {
+            options: { compilerOptions: { module: 123 as any as ModuleKind } }
+        });
 
-        // Filename can be non-ts file.
-        options.allowNonTsExtensions = true;
+        transpilesCorrectly("Support options with lib values", "const a = 10;", {
+            options: { compilerOptions: { lib: ["es6", "dom"], module: ModuleKind.CommonJS }, fileName: "input.js", reportDiagnostics: true }
+        });
 
-        const newLine = getNewLineCharacter(options);
-        // Create a compilerHost object to allow the compiler to read and write files
-        const compilerHost: CompilerHost = {
-            getSourceFile: (fileName) => fileName === normalizePath(inputFileName) ? sourceFile : undefined,
-            writeFile: (name, text) => {
-                if (fileExtensionIs(name, ".map")) {
-                    Debug.assertEqual(sourceMapText, undefined, "Unexpected multiple source map outputs, file:", name);
-                    sourceMapText = text;
+        transpilesCorrectly("Support options with types values", "const a = 10;", {
+            options: { compilerOptions: { types: ["jquery", "typescript"], module: ModuleKind.CommonJS }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'allowJs'", "x;", {
+            options: { compilerOptions: { allowJs: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'allowSyntheticDefaultImports'", "x;", {
+            options: { compilerOptions: { allowSyntheticDefaultImports: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'allowUnreachableCode'", "x;", {
+            options: { compilerOptions: { allowUnreachableCode: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'allowUnusedLabels'", "x;", {
+            options: { compilerOptions: { allowUnusedLabels: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'alwaysStrict'", "x;", {
+            options: { compilerOptions: { alwaysStrict: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'baseUrl'", "x;", {
+            options: { compilerOptions: { baseUrl: "./folder/baseUrl" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'charset'", "x;", {
+            options: { compilerOptions: { charset: "en-us" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'declaration'", "x;", {
+            options: { compilerOptions: { declaration: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'declarationDir'", "x;", {
+            options: { compilerOptions: { declarationDir: "out/declarations" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'emitBOM'", "x;", {
+            options: { compilerOptions: { emitBOM: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'emitDecoratorMetadata'", "x;", {
+            options: { compilerOptions: { emitDecoratorMetadata: true, experimentalDecorators: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'experimentalDecorators'", "x;", {
+            options: { compilerOptions: { experimentalDecorators: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'forceConsistentCasingInFileNames'", "x;", {
+            options: { compilerOptions: { forceConsistentCasingInFileNames: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'isolatedModules'", "x;", {
+            options: { compilerOptions: { isolatedModules: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'jsx'", "x;", {
+            options: { compilerOptions: { jsx: 1 }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'lib'", "x;", {
+            options: { compilerOptions: { lib: ["es2015", "dom"] }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'locale'", "x;", {
+            options: { compilerOptions: { locale: "en-us" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'module'", "x;", {
+            options: { compilerOptions: { module: ModuleKind.CommonJS }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'moduleResolution'", "x;", {
+            options: { compilerOptions: { moduleResolution: ModuleResolutionKind.NodeJs }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'newLine'", "x;", {
+            options: { compilerOptions: { newLine: NewLineKind.CarriageReturnLineFeed }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noEmit'", "x;", {
+            options: { compilerOptions: { noEmit: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noEmitHelpers'", "x;", {
+            options: { compilerOptions: { noEmitHelpers: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noEmitOnError'", "x;", {
+            options: { compilerOptions: { noEmitOnError: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noErrorTruncation'", "x;", {
+            options: { compilerOptions: { noErrorTruncation: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noFallthroughCasesInSwitch'", "x;", {
+            options: { compilerOptions: { noFallthroughCasesInSwitch: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noImplicitAny'", "x;", {
+            options: { compilerOptions: { noImplicitAny: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noImplicitReturns'", "x;", {
+            options: { compilerOptions: { noImplicitReturns: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noImplicitThis'", "x;", {
+            options: { compilerOptions: { noImplicitThis: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noImplicitUseStrict'", "x;", {
+            options: { compilerOptions: { noImplicitUseStrict: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noLib'", "x;", {
+            options: { compilerOptions: { noLib: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'noResolve'", "x;", {
+            options: { compilerOptions: { noResolve: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'out'", "x;", {
+            options: { compilerOptions: { out: "./out" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'outDir'", "x;", {
+            options: { compilerOptions: { outDir: "./outDir" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'outFile'", "x;", {
+            options: { compilerOptions: { outFile: "./outFile" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'paths'", "x;", {
+            options: { compilerOptions: { paths: { "*": ["./generated*"] } }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'preserveConstEnums'", "x;", {
+            options: { compilerOptions: { preserveConstEnums: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'reactNamespace'", "x;", {
+            options: { compilerOptions: { reactNamespace: "react" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'jsxFactory'", "x;", {
+            options: { compilerOptions: { jsxFactory: "createElement" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'jsxFragmentFactory'", "x;", {
+            options: { compilerOptions: { jsxFactory: "x", jsxFragmentFactory: "frag" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'removeComments'", "x;", {
+            options: { compilerOptions: { removeComments: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'rootDir'", "x;", {
+            options: { compilerOptions: { rootDir: "./rootDir" }, fileName: "./rootDir/input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'rootDirs'", "x;", {
+            options: { compilerOptions: { rootDirs: ["./a", "./b"] }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'skipLibCheck'", "x;", {
+            options: { compilerOptions: { skipLibCheck: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'skipDefaultLibCheck'", "x;", {
+            options: { compilerOptions: { skipDefaultLibCheck: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'strictNullChecks'", "x;", {
+            options: { compilerOptions: { strictNullChecks: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'stripInternal'", "x;", {
+            options: { compilerOptions: { stripInternal: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'suppressExcessPropertyErrors'", "x;", {
+            options: { compilerOptions: { suppressExcessPropertyErrors: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'suppressImplicitAnyIndexErrors'", "x;", {
+            options: { compilerOptions: { suppressImplicitAnyIndexErrors: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'target'", "x;", {
+            options: { compilerOptions: { target: 2 }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'types'", "x;", {
+            options: { compilerOptions: { types: ["jquery", "jasmine"] }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'typeRoots'", "x;", {
+            options: { compilerOptions: { typeRoots: ["./folder"] }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'incremental'", "x;", {
+            options: { compilerOptions: { incremental: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'composite'", "x;", {
+            options: { compilerOptions: { composite: true }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Supports setting 'tsbuildinfo'", "x;", {
+            options: { compilerOptions: { incremental: true, tsBuildInfoFile: "./folder/config.tsbuildinfo" }, fileName: "input.js", reportDiagnostics: true }
+        });
+
+        transpilesCorrectly("Correctly serialize metadata when transpile with CommonJS option",
+            `import * as ng from "angular2/core";` +
+            `declare function foo(...args: any[]);` +
+            `@foo` +
+            `export class MyClass1 {` +
+            `    constructor(private _elementRef: ng.ElementRef){}` +
+            `}`, {
+                options: {
+                    compilerOptions: {
+                        target: ScriptTarget.ES5,
+                        module: ModuleKind.CommonJS,
+                        moduleResolution: ModuleResolutionKind.NodeJs,
+                        emitDecoratorMetadata: true,
+                        experimentalDecorators: true,
+                        isolatedModules: true,
+                    }
                 }
-                else {
-                    Debug.assertEqual(outputText, undefined, "Unexpected multiple outputs, file:", name);
-                    outputText = text;
-                }
-            },
-            getDefaultLibFileName: () => "lib.d.ts",
-            useCaseSensitiveFileNames: () => false,
-            getCanonicalFileName: fileName => fileName,
-            getCurrentDirectory: () => "",
-            getNewLine: () => newLine,
-            fileExists: (fileName): boolean => fileName === inputFileName,
-            readFile: () => "",
-            directoryExists: () => true,
-            getDirectories: () => []
-        };
-
-        // if jsx is specified then treat file as .tsx
-        const inputFileName = transpileOptions.fileName || (transpileOptions.compilerOptions && transpileOptions.compilerOptions.jsx ? "module.tsx" : "module.ts");
-        const sourceFile = createSourceFile(
-            inputFileName,
-            input,
-            {
-                languageVersion: getEmitScriptTarget(options),
-                impliedNodeFormat: getImpliedNodeFormatForFile(toPath(inputFileName, "", compilerHost.getCanonicalFileName), /*cache*/ undefined, compilerHost, options),
-                setExternalModuleIndicator: getSetExternalModuleIndicator(options)
             }
         );
-        if (transpileOptions.moduleName) {
-            sourceFile.moduleName = transpileOptions.moduleName;
-        }
 
-        if (transpileOptions.renamedDependencies) {
-            sourceFile.renamedDependencies = new Map(getEntries(transpileOptions.renamedDependencies));
-        }
-
-        // Output
-        let outputText: string | undefined;
-        let sourceMapText: string | undefined;
-
-        const program = createProgram([inputFileName], options, compilerHost);
-
-        if (transpileOptions.reportDiagnostics) {
-            addRange(/*to*/ diagnostics, /*from*/ program.getSyntacticDiagnostics(sourceFile));
-            addRange(/*to*/ diagnostics, /*from*/ program.getOptionsDiagnostics());
-        }
-        // Emit
-        program.emit(/*targetSourceFile*/ undefined, /*writeFile*/ undefined, /*cancellationToken*/ undefined, /*emitOnlyDtsFiles*/ undefined, transpileOptions.transformers);
-
-        if (outputText === undefined) return Debug.fail("Output generation failed");
-
-        return { outputText, diagnostics, sourceMapText };
-    }
-
-    /*
-     * This is a shortcut function for transpileModule - it accepts transpileOptions as parameters and returns only outputText part of the result.
-     */
-    export function transpile(input: string, compilerOptions?: CompilerOptions, fileName?: string, diagnostics?: Diagnostic[], moduleName?: string): string {
-        const output = transpileModule(input, { compilerOptions, fileName, reportDiagnostics: !!diagnostics, moduleName });
-        // addRange correctly handles cases when wither 'from' or 'to' argument is missing
-        addRange(diagnostics, output.diagnostics);
-        return output.outputText;
-    }
-
-    let commandLineOptionsStringToEnum: CommandLineOptionOfCustomType[];
-
-    /** JS users may pass in string values for enum compiler options (such as ModuleKind), so convert. */
-    /*@internal*/
-    export function fixupCompilerOptions(options: CompilerOptions, diagnostics: Diagnostic[]): CompilerOptions {
-        // Lazily create this value to fix module loading errors.
-        commandLineOptionsStringToEnum = commandLineOptionsStringToEnum ||
-            filter(optionDeclarations, o => typeof o.type === "object" && !forEachEntry(o.type, v => typeof v !== "number")) as CommandLineOptionOfCustomType[];
-
-        options = cloneCompilerOptions(options);
-
-        for (const opt of commandLineOptionsStringToEnum) {
-            if (!hasProperty(options, opt.name)) {
-                continue;
-            }
-
-            const value = options[opt.name];
-            // Value should be a key of opt.type
-            if (isString(value)) {
-                // If value is not a string, this will fail
-                options[opt.name] = parseCustomTypeOption(opt, value, diagnostics);
-            }
-            else {
-                if (!forEachEntry(opt.type, v => v === value)) {
-                    // Supplied value isn't a valid enum value.
-                    diagnostics.push(createCompilerDiagnosticForInvalidCustomType(opt));
+        transpilesCorrectly("Correctly serialize metadata when transpile with System option",
+            `import * as ng from "angular2/core";` +
+            `declare function foo(...args: any[]);` +
+            `@foo` +
+            `export class MyClass1 {` +
+            `    constructor(private _elementRef: ng.ElementRef){}` +
+            `}`, {
+                options: {
+                    compilerOptions: {
+                        target: ScriptTarget.ES5,
+                        module: ModuleKind.System,
+                        moduleResolution: ModuleResolutionKind.NodeJs,
+                        emitDecoratorMetadata: true,
+                        experimentalDecorators: true,
+                        isolatedModules: true,
+                    }
                 }
             }
-        }
+        );
 
-        return options;
-    }
+        transpilesCorrectly("Supports readonly keyword for arrays", "let x: readonly string[];", {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Supports 'as const' arrays", `([] as const).forEach(k => console.log(k));`, {
+            options: { compilerOptions: { module: ModuleKind.CommonJS } }
+        });
+
+        transpilesCorrectly("Infer correct file extension", `const fn = <T>(a: T) => a`, {
+            noSetFileName: true
+        });
+
+        transpilesCorrectly("Export star as ns conflict does not crash", `
+var a;
+export { a as alias };
+export * as alias from './file';`, {
+            noSetFileName: true
+        });
+    });
 }

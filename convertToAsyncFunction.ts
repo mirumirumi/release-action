@@ -1,848 +1,1839 @@
-/* @internal */
-namespace ts.codefix {
-    const fixId = "convertToAsyncFunction";
-    const errorCodes = [Diagnostics.This_may_be_converted_to_an_async_function.code];
-    let codeActionSucceeded = true;
-    registerCodeFix({
-        errorCodes,
-        getCodeActions(context: CodeFixContext) {
-            codeActionSucceeded = true;
-            const changes = textChanges.ChangeTracker.with(context, (t) => convertToAsyncFunction(t, context.sourceFile, context.span.start, context.program.getTypeChecker()));
-            return codeActionSucceeded ? [createCodeFixAction(fixId, changes, Diagnostics.Convert_to_async_function, fixId, Diagnostics.Convert_all_to_async_functions)] : [];
-        },
-        fixIds: [fixId],
-        getAllCodeActions: context => codeFixAll(context, errorCodes, (changes, err) => convertToAsyncFunction(changes, err.file, err.start, context.program.getTypeChecker())),
-    });
+namespace ts {
+    const libFile: TestFSWithWatch.File = {
+        path: "/a/lib/lib.d.ts",
+        content: `/// <reference no-default-lib="true"/>
+interface Boolean {}
+interface Function {}
+interface IArguments {}
+interface Number { toExponential: any; }
+interface Object {}
+declare function fetch(input?, init?): Promise<Response>;
+interface Response extends Body {
+    readonly headers: Headers;
+    readonly ok: boolean;
+    readonly redirected: boolean;
+    readonly status: number;
+    readonly statusText: string;
+    readonly trailer: Promise<Headers>;
+    readonly type: ResponseType;
+    readonly url: string;
+    clone(): Response;
+}
+interface Body {
+    readonly body: ReadableStream | null;
+    readonly bodyUsed: boolean;
+    arrayBuffer(): Promise<ArrayBuffer>;
+    blob(): Promise<Blob>;
+    formData(): Promise<FormData>;
+    json(): Promise<any>;
+    text(): Promise<string>;
+}
+declare type PromiseConstructorLike = new <T>(executor: (resolve: (value?: T | PromiseLike<T>) => void, reject: (reason?: any) => void) => void) => PromiseLike<T>;
+interface PromiseLike<T> {
+    /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * @param onfulfilled The callback to execute when the Promise is resolved.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of which ever callback is executed.
+     */
+    then<TResult1 = T, TResult2 = never>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): PromiseLike<TResult1 | TResult2>;
+}
+interface Promise<T> {
+    /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * @param onfulfilled The callback to execute when the Promise is resolved.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of which ever callback is executed.
+     */
+    then<TResult1 = T, TResult2 = never>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): Promise<TResult1 | TResult2>;
 
-    const enum SynthBindingNameKind {
-        Identifier,
-        BindingPattern,
-    }
+    /**
+     * Attaches a callback for only the rejection of the Promise.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of the callback.
+     */
+    catch<TResult = never>(onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): Promise<T | TResult>;
+    /**
+     * Attaches a callback that is invoked when the Promise is settled (fulfilled or rejected). The
+     * resolved value cannot be modified from the callback.
+     * @param onfinally The callback to execute when the Promise is settled (fulfilled or rejected).
+     * @returns A Promise for the completion of the callback.
+     */
+    finally(onfinally?: (() => void) | undefined | null): Promise<T>
+}
+interface PromiseConstructor {
+    /**
+     * A reference to the prototype.
+     */
+    readonly prototype: Promise<any>;
 
-    type SynthBindingName = SynthBindingPattern | SynthIdentifier;
+    /**
+     * Creates a new Promise.
+     * @param executor A callback used to initialize the promise. This callback is passed two arguments:
+     * a resolve callback used resolve the promise with a value or the result of another promise,
+     * and a reject callback used to reject the promise with a provided reason or error.
+     */
+    new <T>(executor: (resolve: (value?: T | PromiseLike<T>) => void, reject: (reason?: any) => void) => void): Promise<T>;
 
-    interface SynthBindingPattern {
-        readonly kind: SynthBindingNameKind.BindingPattern;
-        readonly elements: readonly SynthBindingName[];
-        readonly bindingPattern: BindingPattern;
-        readonly types: Type[];
-    }
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>, T9 | PromiseLike<T9>, T10 | PromiseLike<T10>]): Promise<[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]>;
 
-    interface SynthIdentifier {
-        readonly kind: SynthBindingNameKind.Identifier;
-        readonly identifier: Identifier;
-        readonly types: Type[];
-        /** A declaration for this identifier has already been generated */
-        hasBeenDeclared: boolean;
-        hasBeenReferenced: boolean;
-    }
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5, T6, T7, T8, T9>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>, T9 | PromiseLike<T9>]): Promise<[T1, T2, T3, T4, T5, T6, T7, T8, T9]>;
 
-    interface Transformer {
-        readonly checker: TypeChecker;
-        readonly synthNamesMap: ESMap<string, SynthIdentifier>; // keys are the symbol id of the identifier
-        readonly setOfExpressionsToReturn: ReadonlySet<number>; // keys are the node ids of the expressions
-        readonly isInJSFile: boolean;
-    }
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5, T6, T7, T8>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>]): Promise<[T1, T2, T3, T4, T5, T6, T7, T8]>;
 
-    interface PromiseReturningCallExpression<Name extends string> extends CallExpression {
-        readonly expression: PropertyAccessExpression & {
-            readonly escapedText: Name;
-        };
-    }
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5, T6, T7>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>]): Promise<[T1, T2, T3, T4, T5, T6, T7]>;
 
-    function convertToAsyncFunction(changes: textChanges.ChangeTracker, sourceFile: SourceFile, position: number, checker: TypeChecker): void {
-        // get the function declaration - returns a promise
-        const tokenAtPosition = getTokenAtPosition(sourceFile, position);
-        let functionToConvert: FunctionLikeDeclaration | undefined;
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5, T6>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>]): Promise<[T1, T2, T3, T4, T5, T6]>;
 
-        // if the parent of a FunctionLikeDeclaration is a variable declaration, the convertToAsync diagnostic will be reported on the variable name
-        if (isIdentifier(tokenAtPosition) && isVariableDeclaration(tokenAtPosition.parent) &&
-            tokenAtPosition.parent.initializer && isFunctionLikeDeclaration(tokenAtPosition.parent.initializer)) {
-            functionToConvert = tokenAtPosition.parent.initializer;
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4, T5>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>, T5 | PromiseLike<T5>]): Promise<[T1, T2, T3, T4, T5]>;
+
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3, T4>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike <T4>]): Promise<[T1, T2, T3, T4]>;
+
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2, T3>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>]): Promise<[T1, T2, T3]>;
+
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T1, T2>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>]): Promise<[T1, T2]>;
+
+    /**
+     * Creates a Promise that is resolved with an array of results when all of the provided Promises
+     * resolve, or rejected when any Promise is rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    all<T>(values: (T | PromiseLike<T>)[]): Promise<T[]>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>, T9 | PromiseLike<T9>, T10 | PromiseLike<T10>]): Promise<T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9 | T10>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5, T6, T7, T8, T9>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>, T9 | PromiseLike<T9>]): Promise<T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5, T6, T7, T8>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>, T8 | PromiseLike<T8>]): Promise<T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5, T6, T7>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>, T7 | PromiseLike<T7>]): Promise<T1 | T2 | T3 | T4 | T5 | T6 | T7>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5, T6>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>, T6 | PromiseLike<T6>]): Promise<T1 | T2 | T3 | T4 | T5 | T6>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4, T5>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>, T5 | PromiseLike<T5>]): Promise<T1 | T2 | T3 | T4 | T5>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3, T4>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>, T4 | PromiseLike<T4>]): Promise<T1 | T2 | T3 | T4>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2, T3>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>, T3 | PromiseLike<T3>]): Promise<T1 | T2 | T3>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T1, T2>(values: [T1 | PromiseLike<T1>, T2 | PromiseLike<T2>]): Promise<T1 | T2>;
+
+    /**
+     * Creates a Promise that is resolved or rejected when any of the provided Promises are resolved
+     * or rejected.
+     * @param values An array of Promises.
+     * @returns A new Promise.
+     */
+    race<T>(values: (T | PromiseLike<T>)[]): Promise<T>;
+
+    /**
+     * Creates a new rejected promise for the provided reason.
+     * @param reason The reason the promise was rejected.
+     * @returns A new rejected Promise.
+     */
+    reject<T = never>(reason?: any): Promise<T>;
+
+    /**
+     * Creates a new resolved promise for the provided value.
+     * @param value A promise.
+     * @returns A promise whose internal state matches the provided promise.
+     */
+    resolve<T>(value: T | PromiseLike<T>): Promise<T>;
+
+    /**
+     * Creates a new resolved promise .
+     * @returns A resolved promise.
+     */
+    resolve(): Promise<void>;
+}
+
+declare var Promise: PromiseConstructor;
+interface RegExp {}
+interface String { charAt: any; }
+interface Array<T> {}`
+    };
+
+    const moduleFile: TestFSWithWatch.File = {
+        path: "/module.ts",
+        content:
+`export function fn(res: any): any {
+    return res;
+}`
+    };
+
+    type WithSkipAndOnly<T extends any[]> = ((...args: T) => void) & {
+        skip: (...args: T) => void;
+        only: (...args: T) => void;
+    };
+
+    function createTestWrapper<T extends any[]>(fn: (it: Mocha.PendingTestFunction, ...args: T) => void): WithSkipAndOnly<T> {
+        wrapped.skip = (...args: T) => fn(it.skip, ...args);
+        wrapped.only = (...args: T) => fn(it.only, ...args);
+        return wrapped;
+        function wrapped(...args: T) {
+            return fn(it, ...args);
         }
-        else {
-            functionToConvert = tryCast(getContainingFunction(getTokenAtPosition(sourceFile, position)), canBeConvertedToAsync);
-        }
-
-        if (!functionToConvert) {
-            return;
-        }
-
-        const synthNamesMap = new Map<string, SynthIdentifier>();
-        const isInJavascript = isInJSFile(functionToConvert);
-        const setOfExpressionsToReturn = getAllPromiseExpressionsToReturn(functionToConvert, checker);
-        const functionToConvertRenamed = renameCollidingVarNames(functionToConvert, checker, synthNamesMap);
-        if (!returnsPromise(functionToConvertRenamed, checker)) {
-            return;
-        }
-
-        const returnStatements = functionToConvertRenamed.body && isBlock(functionToConvertRenamed.body) ? getReturnStatementsWithPromiseHandlers(functionToConvertRenamed.body, checker) : emptyArray;
-        const transformer: Transformer = { checker, synthNamesMap, setOfExpressionsToReturn, isInJSFile: isInJavascript };
-        if (!returnStatements.length) {
-            return;
-        }
-
-        const pos = functionToConvert.modifiers ? functionToConvert.modifiers.end :
-            functionToConvert.decorators ? skipTrivia(sourceFile.text, functionToConvert.decorators.end) :
-                functionToConvert.getStart(sourceFile);
-        const options = functionToConvert.modifiers ? { prefix: " " } : { suffix: " " };
-        changes.insertModifierAt(sourceFile, pos, SyntaxKind.AsyncKeyword, options);
-
-        for (const returnStatement of returnStatements) {
-            forEachChild(returnStatement, function visit(node) {
-                if (isCallExpression(node)) {
-                    const newNodes = transformExpression(node, node, transformer, /*hasContinuation*/ false);
-                    if (hasFailed()) {
-                        return true; // return something truthy to shortcut out of more work
-                    }
-                    changes.replaceNodeWithNodes(sourceFile, returnStatement, newNodes);
-                }
-                else if (!isFunctionLike(node)) {
-                    forEachChild(node, visit);
-                    if (hasFailed()) {
-                        return true; // return something truthy to shortcut out of more work
-                    }
-                }
-            });
-            if (hasFailed()) {
-                return; // shortcut out of more work
-            }
-        }
     }
 
-    function getReturnStatementsWithPromiseHandlers(body: Block, checker: TypeChecker): readonly ReturnStatement[] {
-        const res: ReturnStatement[] = [];
-        forEachReturnStatement(body, ret => {
-            if (isReturnStatementWithFixablePromiseHandler(ret, checker)) res.push(ret);
-        });
-        return res;
+    const enum ConvertToAsyncTestFlags {
+        None,
+        IncludeLib = 1 << 0,
+        IncludeModule = 1 << 1,
+        ExpectSuggestionDiagnostic = 1 << 2,
+        ExpectNoSuggestionDiagnostic = 1 << 3,
+        ExpectAction = 1 << 4,
+        ExpectNoAction = 1 << 5,
+
+        ExpectSuccess = ExpectSuggestionDiagnostic | ExpectAction,
+        ExpectFailed = ExpectNoSuggestionDiagnostic | ExpectNoAction,
     }
 
-    /*
-        Finds all of the expressions of promise type that should not be saved in a variable during the refactor
-    */
-    function getAllPromiseExpressionsToReturn(func: FunctionLikeDeclaration, checker: TypeChecker): Set<number> {
-        if (!func.body) {
-            return new Set();
+    function testConvertToAsyncFunction(it: Mocha.PendingTestFunction, caption: string, text: string, baselineFolder: string, flags: ConvertToAsyncTestFlags) {
+        const includeLib = !!(flags & ConvertToAsyncTestFlags.IncludeLib);
+        const includeModule = !!(flags & ConvertToAsyncTestFlags.IncludeModule);
+        const expectSuggestionDiagnostic = !!(flags & ConvertToAsyncTestFlags.ExpectSuggestionDiagnostic);
+        const expectNoSuggestionDiagnostic = !!(flags & ConvertToAsyncTestFlags.ExpectNoSuggestionDiagnostic);
+        const expectAction = !!(flags & ConvertToAsyncTestFlags.ExpectAction);
+        const expectNoAction = !!(flags & ConvertToAsyncTestFlags.ExpectNoAction);
+        const expectFailure = expectNoSuggestionDiagnostic || expectNoAction;
+        Debug.assert(!(expectSuggestionDiagnostic && expectNoSuggestionDiagnostic), "Cannot combine both 'ExpectSuggestionDiagnostic' and 'ExpectNoSuggestionDiagnostic'");
+        Debug.assert(!(expectAction && expectNoAction), "Cannot combine both 'ExpectAction' and 'ExpectNoAction'");
+
+        const t = extractTest(text);
+        const selectionRange = t.ranges.get("selection")!;
+        if (!selectionRange) {
+            throw new Error(`Test ${caption} does not specify selection range`);
         }
 
-        const setOfExpressionsToReturn = new Set<number>();
-        forEachChild(func.body, function visit(node: Node) {
-            if (isPromiseReturningCallExpression(node, checker, "then")) {
-                setOfExpressionsToReturn.add(getNodeId(node));
-                forEach(node.arguments, visit);
-            }
-            else if (isPromiseReturningCallExpression(node, checker, "catch") ||
-                isPromiseReturningCallExpression(node, checker, "finally")) {
-                setOfExpressionsToReturn.add(getNodeId(node));
-                // if .catch() or .finally() is the last call in the chain, move leftward in the chain until we hit something else that should be returned
-                forEachChild(node, visit);
-            }
-            else if (isPromiseTypedExpression(node, checker)) {
-                setOfExpressionsToReturn.add(getNodeId(node));
-                // don't recurse here, since we won't refactor any children or arguments of the expression
-            }
-            else {
-                forEachChild(node, visit);
-            }
-        });
+        const extensions = expectFailure ? [Extension.Ts] : [Extension.Ts, Extension.Js];
 
-        return setOfExpressionsToReturn;
-    }
+        extensions.forEach(extension =>
+            it(`${caption} [${extension}]`, () => runBaseline(extension)));
 
-    function isPromiseReturningCallExpression<Name extends string>(node: Node, checker: TypeChecker, name: Name): node is PromiseReturningCallExpression<Name> {
-        if (!isCallExpression(node)) return false;
-        const isExpressionOfName = hasPropertyAccessExpressionWithName(node, name);
-        const nodeType = isExpressionOfName && checker.getTypeAtLocation(node);
-        return !!(nodeType && checker.getPromisedTypeOfPromise(nodeType));
-    }
+        function runBaseline(extension: Extension) {
+            const path = "/a" + extension;
+            const languageService = makeLanguageService({ path, content: t.source }, includeLib, includeModule);
+            const program = languageService.getProgram()!;
 
-    // NOTE: this is a mostly copy of `isReferenceToType` from checker.ts. While this violates DRY, it keeps
-    // `isReferenceToType` in checker local to the checker to avoid the cost of a property lookup on `ts`.
-    function isReferenceToType(type: Type, target: Type) {
-        return (getObjectFlags(type) & ObjectFlags.Reference) !== 0
-            && (type as TypeReference).target === target;
-    }
-
-    function getExplicitPromisedTypeOfPromiseReturningCallExpression(node: PromiseReturningCallExpression<"then" | "catch" | "finally">, callback: Expression, checker: TypeChecker) {
-        if (node.expression.name.escapedText === "finally") {
-            // for a `finally`, there's no type argument
-            return undefined;
-        }
-
-        // If the call to `then` or `catch` comes from the global `Promise` or `PromiseLike` type, we can safely use the
-        // type argument supplied for the callback. For other promise types we would need a more complex heuristic to determine
-        // which type argument is safe to use as an annotation.
-        const promiseType = checker.getTypeAtLocation(node.expression.expression);
-        if (isReferenceToType(promiseType, checker.getPromiseType()) ||
-            isReferenceToType(promiseType, checker.getPromiseLikeType())) {
-            if (node.expression.name.escapedText === "then") {
-                if (callback === elementAt(node.arguments, 0)) {
-                    // for the `onfulfilled` callback, use the first type argument
-                    return elementAt(node.typeArguments, 0);
-                }
-                else if (callback === elementAt(node.arguments, 1)) {
-                    // for the `onrejected` callback, use the second type argument
-                    return elementAt(node.typeArguments, 1);
-                }
-            }
-            else {
-                return elementAt(node.typeArguments, 0);
-            }
-        }
-    }
-
-    function isPromiseTypedExpression(node: Node, checker: TypeChecker): node is Expression {
-        if (!isExpression(node)) return false;
-        return !!checker.getPromisedTypeOfPromise(checker.getTypeAtLocation(node));
-    }
-
-    /*
-        Renaming of identifiers may be necessary as the refactor changes scopes -
-        This function collects all existing identifier names and names of identifiers that will be created in the refactor.
-        It then checks for any collisions and renames them through getSynthesizedDeepClone
-    */
-    function renameCollidingVarNames(nodeToRename: FunctionLikeDeclaration, checker: TypeChecker, synthNamesMap: ESMap<string, SynthIdentifier>): FunctionLikeDeclaration {
-        const identsToRenameMap = new Map<string, Identifier>(); // key is the symbol id
-        const collidingSymbolMap = createMultiMap<Symbol>();
-        forEachChild(nodeToRename, function visit(node: Node) {
-            if (!isIdentifier(node)) {
-                forEachChild(node, visit);
+            if (hasSyntacticDiagnostics(program)) {
+                // Don't bother generating JS baselines for inputs that aren't valid JS.
+                assert.equal(Extension.Js, extension, "Syntactic diagnostics found in non-JS file");
                 return;
             }
-            const symbol = checker.getSymbolAtLocation(node);
-            if (symbol) {
-                const type = checker.getTypeAtLocation(node);
-                // Note - the choice of the last call signature is arbitrary
-                const lastCallSignature = getLastCallSignature(type, checker);
-                const symbolIdString = getSymbolId(symbol).toString();
 
-                // If the identifier refers to a function, we want to add the new synthesized variable for the declaration. Example:
-                //   fetch('...').then(response => { ... })
-                // will eventually become
-                //   const response = await fetch('...')
-                // so we push an entry for 'response'.
-                if (lastCallSignature && !isParameter(node.parent) && !isFunctionLikeDeclaration(node.parent) && !synthNamesMap.has(symbolIdString)) {
-                    const firstParameter = firstOrUndefined(lastCallSignature.parameters);
-                    const ident = firstParameter?.valueDeclaration
-                        && isParameter(firstParameter.valueDeclaration)
-                        && tryCast(firstParameter.valueDeclaration.name, isIdentifier)
-                        || factory.createUniqueName("result", GeneratedIdentifierFlags.Optimistic);
-                    const synthName = getNewNameIfConflict(ident, collidingSymbolMap);
-                    synthNamesMap.set(symbolIdString, synthName);
-                    collidingSymbolMap.add(ident.text, symbol);
-                }
-                // We only care about identifiers that are parameters, variable declarations, or binding elements
-                else if (node.parent && (isParameter(node.parent) || isVariableDeclaration(node.parent) || isBindingElement(node.parent))) {
-                    const originalName = node.text;
-                    const collidingSymbols = collidingSymbolMap.get(originalName);
+            const f = {
+                path,
+                content: t.source
+            };
 
-                    // if the identifier name conflicts with a different identifier that we've already seen
-                    if (collidingSymbols && collidingSymbols.some(prevSymbol => prevSymbol !== symbol)) {
-                        const newName = getNewNameIfConflict(node, collidingSymbolMap);
-                        identsToRenameMap.set(symbolIdString, newName.identifier);
-                        synthNamesMap.set(symbolIdString, newName);
-                        collidingSymbolMap.add(originalName, symbol);
-                    }
-                    else {
-                        const identifier = getSynthesizedDeepClone(node);
-                        synthNamesMap.set(symbolIdString, createSynthIdentifier(identifier));
-                        collidingSymbolMap.add(originalName, symbol);
-                    }
-                }
-            }
-        });
+            const sourceFile = program.getSourceFile(path)!;
+            const context: CodeFixContext = {
+                errorCode: 80006,
+                span: { start: selectionRange.pos, length: selectionRange.end - selectionRange.pos },
+                sourceFile,
+                program,
+                cancellationToken: { throwIfCancellationRequested: noop, isCancellationRequested: returnFalse },
+                preferences: emptyOptions,
+                host: notImplementedHost,
+                formatContext: formatting.getFormatContext(testFormatSettings, notImplementedHost)
+            };
 
-        return getSynthesizedDeepCloneWithReplacements(nodeToRename, /*includeTrivia*/ true, original => {
-            if (isBindingElement(original) && isIdentifier(original.name) && isObjectBindingPattern(original.parent)) {
-                const symbol = checker.getSymbolAtLocation(original.name);
-                const renameInfo = symbol && identsToRenameMap.get(String(getSymbolId(symbol)));
-                if (renameInfo && renameInfo.text !== (original.name || original.propertyName).getText()) {
-                    return factory.createBindingElement(
-                        original.dotDotDotToken,
-                        original.propertyName || original.name,
-                        renameInfo,
-                        original.initializer);
-                }
-            }
-            else if (isIdentifier(original)) {
-                const symbol = checker.getSymbolAtLocation(original);
-                const renameInfo = symbol && identsToRenameMap.get(String(getSymbolId(symbol)));
-                if (renameInfo) {
-                    return factory.createIdentifier(renameInfo.text);
-                }
-            }
-        });
-    }
+            const diagnostics = languageService.getSuggestionDiagnostics(f.path);
+            const diagnostic = find(diagnostics, diagnostic => diagnostic.messageText === Diagnostics.This_may_be_converted_to_an_async_function.message &&
+                diagnostic.start === context.span.start && diagnostic.length === context.span.length);
+            const actions = codefix.getFixes(context);
+            const action = find(actions, action => action.description === Diagnostics.Convert_to_async_function.message);
 
-    function getNewNameIfConflict(name: Identifier, originalNames: ReadonlyESMap<string, Symbol[]>): SynthIdentifier {
-        const numVarsSameName = (originalNames.get(name.text) || emptyArray).length;
-        const identifier = numVarsSameName === 0 ? name : factory.createIdentifier(name.text + "_" + numVarsSameName);
-        return createSynthIdentifier(identifier);
-    }
+            let outputText: string | null;
+            if (action?.changes.length) {
+                const data: string[] = [];
+                data.push(`// ==ORIGINAL==`);
+                data.push(text.replace("[#|", "/*[#|*/").replace("|]", "/*|]*/"));
+                const changes = action.changes;
+                assert.lengthOf(changes, 1);
 
-    function hasFailed() {
-        return !codeActionSucceeded;
-    }
+                data.push(`// ==ASYNC FUNCTION::${action.description}==`);
+                const newText = textChanges.applyChanges(sourceFile.text, changes[0].textChanges);
+                data.push(newText);
 
-    function silentFail() {
-        codeActionSucceeded = false;
-        return emptyArray;
-    }
-
-    // dispatch function to recursively build the refactoring
-    // should be kept up to date with isFixablePromiseHandler in suggestionDiagnostics.ts
-    /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows the continuation to which this expression belongs.
-     * @param continuationArgName The argument name for the continuation that follows this call.
-     */
-    function transformExpression(returnContextNode: Expression, node: Expression, transformer: Transformer, hasContinuation: boolean, continuationArgName?: SynthBindingName): readonly Statement[] {
-        if (isPromiseReturningCallExpression(node, transformer.checker, "then")) {
-            return transformThen(node, elementAt(node.arguments, 0), elementAt(node.arguments, 1), transformer, hasContinuation, continuationArgName);
-        }
-        if (isPromiseReturningCallExpression(node, transformer.checker, "catch")) {
-            return transformCatch(node, elementAt(node.arguments, 0), transformer, hasContinuation, continuationArgName);
-        }
-        if (isPromiseReturningCallExpression(node, transformer.checker, "finally")) {
-            return transformFinally(node, elementAt(node.arguments, 0), transformer, hasContinuation, continuationArgName);
-        }
-        if (isPropertyAccessExpression(node)) {
-            return transformExpression(returnContextNode, node.expression, transformer, hasContinuation, continuationArgName);
-        }
-
-        const nodeType = transformer.checker.getTypeAtLocation(node);
-        if (nodeType && transformer.checker.getPromisedTypeOfPromise(nodeType)) {
-            Debug.assertNode(getOriginalNode(node).parent, isPropertyAccessExpression);
-            return transformPromiseExpressionOfPropertyAccess(returnContextNode, node, transformer, hasContinuation, continuationArgName);
-        }
-
-        return silentFail();
-    }
-
-    function isNullOrUndefined({ checker }: Transformer, node: Expression) {
-        if (node.kind === SyntaxKind.NullKeyword) return true;
-        if (isIdentifier(node) && !isGeneratedIdentifier(node) && idText(node) === "undefined") {
-            const symbol = checker.getSymbolAtLocation(node);
-            return !symbol || checker.isUndefinedSymbol(symbol);
-        }
-        return false;
-    }
-
-    function createUniqueSynthName(prevArgName: SynthIdentifier): SynthIdentifier {
-        const renamedPrevArg = factory.createUniqueName(prevArgName.identifier.text, GeneratedIdentifierFlags.Optimistic);
-        return createSynthIdentifier(renamedPrevArg);
-    }
-
-    function getPossibleNameForVarDecl(node: PromiseReturningCallExpression<"then" | "catch" | "finally">, transformer: Transformer, continuationArgName?: SynthBindingName) {
-        let possibleNameForVarDecl: SynthIdentifier | undefined;
-
-        // If there is another call in the chain after the .catch() or .finally() we are transforming, we will need to save the result of both paths
-        // (try block and catch/finally block). To do this, we will need to synthesize a variable that we were not aware of while we were adding
-        // identifiers to the synthNamesMap. We will use the continuationArgName and then update the synthNamesMap with a new variable name for
-        // the next transformation step
-
-        if (continuationArgName && !shouldReturn(node, transformer)) {
-            if (isSynthIdentifier(continuationArgName)) {
-                possibleNameForVarDecl = continuationArgName;
-                transformer.synthNamesMap.forEach((val, key) => {
-                    if (val.identifier.text === continuationArgName.identifier.text) {
-                        const newSynthName = createUniqueSynthName(continuationArgName);
-                        transformer.synthNamesMap.set(key, newSynthName);
-                    }
-                });
+                const diagProgram = makeLanguageService({ path, content: newText }, includeLib, includeModule).getProgram()!;
+                assert.isFalse(hasSyntacticDiagnostics(diagProgram));
+                outputText = data.join(newLineCharacter);
             }
             else {
-                possibleNameForVarDecl = createSynthIdentifier(factory.createUniqueName("result", GeneratedIdentifierFlags.Optimistic), continuationArgName.types);
+                // eslint-disable-next-line no-null/no-null
+                outputText = null;
             }
 
-            // We are about to write a 'let' variable declaration, but `transformExpression` for both
-            // the try block and catch/finally block will assign to this name. Setting this flag indicates
-            // that future assignments should be written as `name = value` instead of `const name = value`.
-            declareSynthIdentifier(possibleNameForVarDecl);
+            Harness.Baseline.runBaseline(`${baselineFolder}/${caption}${extension}`, outputText);
+
+            if (expectNoSuggestionDiagnostic) {
+                assert.isUndefined(diagnostic, "Expected code fix to not provide a suggestion diagnostic");
+            }
+            else if (expectSuggestionDiagnostic) {
+                assert.exists(diagnostic, "Expected code fix to provide a suggestion diagnostic");
+            }
+
+            if (expectNoAction) {
+                assert.isNotTrue(!!action?.changes.length, "Expected code fix to not provide an action");
+                assert.isNotTrue(typeof outputText === "string", "Expected code fix to not apply changes");
+            }
+            else if (expectAction) {
+                assert.isTrue(!!action?.changes.length, "Expected code fix to provide an action");
+                assert.isTrue(typeof outputText === "string", "Expected code fix to apply changes");
+            }
         }
 
-        return possibleNameForVarDecl;
+        function makeLanguageService(file: TestFSWithWatch.File, includeLib?: boolean, includeModule?: boolean) {
+            const files = [file];
+            if (includeLib) {
+                files.push(libFile); // libFile is expensive to parse repeatedly - only test when required
+            }
+            if (includeModule) {
+                files.push(moduleFile);
+            }
+            const host = projectSystem.createServerHost(files);
+            const projectService = projectSystem.createProjectService(host);
+            projectService.openClientFile(file.path);
+            return first(projectService.inferredProjects).getLanguageService();
+        }
+
+        function hasSyntacticDiagnostics(program: Program) {
+            const diags = program.getSyntacticDiagnostics();
+            return length(diags) > 0;
+        }
     }
 
-    function finishCatchOrFinallyTransform(node: PromiseReturningCallExpression<"then" | "catch" | "finally">, transformer: Transformer, tryStatement: TryStatement, possibleNameForVarDecl: SynthIdentifier | undefined, continuationArgName?: SynthBindingName) {
-        const statements: Statement[] = [];
+    const _testConvertToAsyncFunction = createTestWrapper((it, caption: string, text: string) => {
+        testConvertToAsyncFunction(it, caption, text, "convertToAsyncFunction", ConvertToAsyncTestFlags.IncludeLib | ConvertToAsyncTestFlags.ExpectSuccess);
+    });
 
-        // In order to avoid an implicit any, we will synthesize a type for the declaration using the unions of the types of both paths (try block and catch block)
-        let varDeclIdentifier: Identifier | undefined;
+    const _testConvertToAsyncFunctionFailed = createTestWrapper((it, caption: string, text: string) => {
+        testConvertToAsyncFunction(it, caption, text, "convertToAsyncFunction", ConvertToAsyncTestFlags.IncludeLib | ConvertToAsyncTestFlags.ExpectFailed);
+    });
 
-        if (possibleNameForVarDecl && !shouldReturn(node, transformer)) {
-            varDeclIdentifier = getSynthesizedDeepClone(declareSynthIdentifier(possibleNameForVarDecl));
-            const typeArray: Type[] = possibleNameForVarDecl.types;
-            const unionType = transformer.checker.getUnionType(typeArray, UnionReduction.Subtype);
-            const unionTypeNode = transformer.isInJSFile ? undefined : transformer.checker.typeToTypeNode(unionType, /*enclosingDeclaration*/ undefined, /*flags*/ undefined);
-            const varDecl = [factory.createVariableDeclaration(varDeclIdentifier, /*exclamationToken*/ undefined, unionTypeNode)];
-            const varDeclList = factory.createVariableStatement(/*modifiers*/ undefined, factory.createVariableDeclarationList(varDecl, NodeFlags.Let));
-            statements.push(varDeclList);
-        }
+    const _testConvertToAsyncFunctionFailedSuggestion = createTestWrapper((it, caption: string, text: string) => {
+        testConvertToAsyncFunction(it, caption, text, "convertToAsyncFunction", ConvertToAsyncTestFlags.IncludeLib | ConvertToAsyncTestFlags.ExpectNoSuggestionDiagnostic | ConvertToAsyncTestFlags.ExpectAction);
+    });
 
-        statements.push(tryStatement);
+    const _testConvertToAsyncFunctionFailedAction = createTestWrapper((it, caption: string, text: string) => {
+        testConvertToAsyncFunction(it, caption, text, "convertToAsyncFunction", ConvertToAsyncTestFlags.IncludeLib | ConvertToAsyncTestFlags.ExpectSuggestionDiagnostic | ConvertToAsyncTestFlags.ExpectNoAction);
+    });
 
-        if (continuationArgName && varDeclIdentifier && isSynthBindingPattern(continuationArgName)) {
-            statements.push(factory.createVariableStatement(
-                /*modifiers*/ undefined,
-                factory.createVariableDeclarationList([
-                    factory.createVariableDeclaration(
-                        getSynthesizedDeepClone(declareSynthBindingPattern(continuationArgName)),
-                        /*exclamationToken*/ undefined,
-                        /*type*/ undefined,
-                        varDeclIdentifier
-                    )],
-                    NodeFlags.Const)));
-        }
+    const _testConvertToAsyncFunctionWithModule = createTestWrapper((it, caption: string, text: string) => {
+        testConvertToAsyncFunction(it, caption, text, "convertToAsyncFunction", ConvertToAsyncTestFlags.IncludeLib | ConvertToAsyncTestFlags.IncludeModule | ConvertToAsyncTestFlags.ExpectSuccess);
+    });
 
-        return statements;
+    describe("unittests:: services:: convertToAsyncFunction", () => {
+        _testConvertToAsyncFunction("convertToAsyncFunction_basic", `
+function [#|f|](): Promise<void>{
+    return fetch('https://typescriptlang.org').then(result => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_arrayBindingPattern", `
+function [#|f|](): Promise<void>{
+    return fetch('https://typescriptlang.org').then(([result]) => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_objectBindingPattern", `
+function [#|f|](): Promise<void>{
+    return fetch('https://typescriptlang.org').then(({ result }) => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_arrayBindingPatternRename", `
+function [#|f|](): Promise<void>{
+    const result = getResult();
+    return fetch('https://typescriptlang.org').then(([result]) => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_objectBindingPatternRename", `
+function [#|f|](): Promise<void>{
+    const result = getResult();
+    return fetch('https://typescriptlang.org').then(({ result }) => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_basicNoReturnTypeAnnotation", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result) });
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_basicWithComments", `
+function [#|f|](): Promise<void>{
+    /* Note - some of these comments are removed during the refactor. This is not ideal. */
+
+    // a
+    /*b*/ return /*c*/ fetch( /*d*/ 'https://typescriptlang.org' /*e*/).then( /*f*/ result /*g*/ => { /*h*/ console.log(/*i*/ result /*j*/) /*k*/}/*l*/);
+    // m
+}`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ArrowFunction", `
+[#|():Promise<void> => {|]
+    return fetch('https://typescriptlang.org').then(result => console.log(result));
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_ArrowFunctionNoAnnotation", `
+[#|() => {|]
+    return fetch('https://typescriptlang.org').then(result => console.log(result));
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_Catch", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result); }).catch(err => { console.log(err); });
+}`);
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_CatchAndRej", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result); }, rejection => { console.log("rejected:", rejection); }).catch(err => { console.log(err) });
+}`);
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_CatchAndRejRef", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res, rej).catch(catch_err)
+}
+function res(result){
+    console.log(result);
+}
+function rej(rejection){
+    return rejection.ok;
+}
+function catch_err(err){
+    console.log(err);
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchRef", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res).catch(catch_err)
+}
+function res(result){
+    console.log(result);
+}
+function catch_err(err){
+    console.log(err);
+}
+`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchNoBrackets", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => console.log(result)).catch(err => console.log(err));
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_IgnoreArgs1", `
+function [#|f|](): Promise<void> {
+    return fetch('https://typescriptlang.org').then( _ => { console.log("done"); });
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_IgnoreArgs2", `
+function [#|f|](): Promise<void> {
+    return fetch('https://typescriptlang.org').then( () => console.log("done") );
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_IgnoreArgs3", `
+function [#|f|](): Promise<void> {
+    return fetch('https://typescriptlang.org').then( () => console.log("almost done") ).then( () => console.log("done") );
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_IgnoreArgs4", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(res);
+}
+function res(){
+    console.log("done");
+}`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Method", `
+class Parser {
+    [#|f|]():Promise<void> {
+        return fetch('https://typescriptlang.org').then(result => console.log(result));
+    }
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_MultipleCatches", `
+function [#|f|](): Promise<void> {
+    return fetch('https://typescriptlang.org').then(res => console.log(res)).catch(err => console.log("err", err)).catch(err2 => console.log("err2", err2));
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_MultipleThens", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res).then(res2);
+}
+function res(result){
+    return result.ok;
+}
+function res2(result2){
+    console.log(result2);
+}`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_MultipleThensSameVarName", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res).then(res2);
+}
+function res(result){
+    return result.ok;
+}
+function res2(result){
+    return result.bodyUsed;
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoRes", `
+function [#|f|]():Promise<void | Response> {
+    return fetch('https://typescriptlang.org').then(null, rejection => console.log("rejected:", rejection));
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoRes2", `
+function [#|f|]():Promise<void | Response> {
+    return fetch('https://typescriptlang.org').then(undefined).catch(rej => console.log(rej));
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoRes3", `
+function [#|f|]():Promise<void | Response> {
+    return fetch('https://typescriptlang.org').catch(rej => console.log(rej));
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoRes4", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(undefined, rejection => console.log("rejected:", rejection));
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoCatchHandler", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(x => x.statusText).catch(undefined);
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestion", `
+function [#|f|]():Promise<Response> {
+    return fetch('https://typescriptlang.org');
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseDotAll", `
+function [#|f|]():Promise<void>{
+    return Promise.all([fetch('https://typescriptlang.org'), fetch('https://microsoft.com'), fetch('https://youtube.com')]).then(function(vals){
+        vals.forEach(console.log);
+    });
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestionNoPromise", `
+function [#|f|]():void{
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_Rej", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result); }, rejection => { console.log("rejected:", rejection); });
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_RejRef", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res, rej);
+}
+function res(result){
+    console.log(result);
+}
+function rej(err){
+    console.log(err);
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_RejNoBrackets", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => console.log(result), rejection => console.log("rejected:", rejection));
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRef", `
+function [#|f|]():Promise<boolean> {
+    return fetch('https://typescriptlang.org').then(res);
+}
+function res(result){
+    return result.ok;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRef1", `
+class Foo {
+    public [#|method|](): Promise<boolean> {
+        return fetch('a').then(this.foo);
     }
 
+    private foo(res) {
+        return res.ok;
+    }
+}
+        `);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRef2", `
+class Foo {
+    public [#|method|](): Promise<Response> {
+        return fetch('a').then(this.foo);
+    }
+
+    private foo = res => res;
+}
+        `);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRef3", `
+const res = (result) => {
+    return result.ok;
+}
+function [#|f|](): Promise<boolean> {
+    return fetch('https://typescriptlang.org').then(res);
+}
+        `
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestionResRef1", `
+const res = 1;
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(res);
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestionResRef2", `
+class Foo {
+    private foo = 1;
+    public [#|method|](): Promise<boolean> {
+        return fetch('a').then(this.foo);
+    }
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestionResRef3", `
+const res = undefined;
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(res);
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NoSuggestionResRef4", `
+class Foo {
+    private foo = undefined;
+    public [#|method|](): Promise<boolean> {
+        return fetch('a').then(this.foo);
+    }
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRefNoReturnVal", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(res);
+}
+function res(result){
+    console.log(result);
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ResRefNoReturnVal1", `
+class Foo {
+    public [#|method|](): Promise<void> {
+        return fetch('a').then(this.foo);
+    }
+
+    private foo(res) {
+        console.log(res);
+    }
+}
+        `);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_NoBrackets", `
+function [#|f|]():Promise<void> {
+    return fetch('https://typescriptlang.org').then(result => console.log(result));
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_Finally1", `
+function [#|finallyTest|](): Promise<void> {
+    return fetch("https://typescriptlang.org").then(res => console.log(res)).catch(rej => console.log("error", rej)).finally(console.log("finally!"));
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_Finally2", `
+function [#|finallyTest|](): Promise<void> {
+    return fetch("https://typescriptlang.org").then(res => console.log(res)).finally(console.log("finally!"));
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_Finally3", `
+function [#|finallyTest|](): Promise<void> {
+    return fetch("https://typescriptlang.org").finally(console.log("finally!"));
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromise", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        var blob2 = resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+        return blob2;
+    }).then(blob => {
+        return blob.toString();
+    });
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseRet", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+    }).then(blob => {
+        return blob.toString();
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseRetBinding1", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(({ blob }) => blob.byteOffset).catch(({ message }) => 'Error ' + message);
+    }).then(blob => {
+        return blob.toString();
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseRetBinding2", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+    }).then(({ x }) => {
+        return x.toString();
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseRetBinding3", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(({ blob }) => blob.byteOffset).catch(({ message }) => 'Error ' + message);
+    }).then(([x, y]) => {
+        return (x || y).toString();
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseRetBinding4", `
+function [#|innerPromise|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(({ blob }: { blob: { byteOffset: number } }) => [0, blob.byteOffset]).catch(({ message }: Error) => ['Error ', message]);
+    }).then(([x, y]) => {
+        return (x || y).toString();
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn01", `
+function [#|f|]() {
+    let blob = fetch("https://typescriptlang.org").then(resp => console.log(resp));
+    return blob;
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn02", `
+function [#|f|]() {
+    let blob = fetch("https://typescriptlang.org");
+    blob.then(resp => console.log(resp));
+    return blob;
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn03", `
+function [#|f|]() {
+    let blob = fetch("https://typescriptlang.org")
+    let blob2 = blob.then(resp => console.log(resp));
+    blob2.catch(err);
+    return blob;
+}
+
+function err (rej) {
+    console.log(rej)
+}
+`
+        );
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn04", `
+function [#|f|]() {
+    var blob = fetch("https://typescriptlang.org").then(res => console.log(res)), blob2 = fetch("https://microsoft.com").then(res => res.ok).catch(err);
+    return blob;
+}
+function err (rej) {
+    console.log(rej)
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn05", `
+function [#|f|]() {
+    var blob = fetch("https://typescriptlang.org").then(res => console.log(res));
+    blob.then(x => x);
+    return blob;
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn06", `
+function [#|f|]() {
+    var blob = fetch("https://typescriptlang.org");
+    return blob;
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn07", `
+function [#|f|]() {
+    let blob = fetch("https://typescriptlang.org");
+    let blob2 = fetch("https://microsoft.com");
+    blob2.then(res => console.log("res:", res));
+    blob.then(resp => console.log(resp));
+    return blob;
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn08", `
+function [#|f|]() {
+    let blob = fetch("https://typescriptlang.org");
+    if (!blob.ok){
+        return blob;
+    }
+    blob.then(resp => console.log(resp));
+    return blob;
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn09", `
+function [#|f|]() {
+    let blob3;
+    let blob = fetch("https://typescriptlang.org");
+    let blob2 = fetch("https://microsoft.com");
+    blob2.then(res => console.log("res:", res));
+    blob.then(resp => console.log(resp));
+    blob3 = blob2.catch(rej => rej.ok);
+    return blob;
+}
+`
+        );
+
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn10", `
+function [#|f|]() {
+    let blob3;
+    let blob = fetch("https://typescriptlang.org");
+    let blob2 = fetch("https://microsoft.com");
+    blob2.then(res => console.log("res:", res));
+    blob.then(resp => console.log(resp));
+    blob3 = fetch("test.com");
+    blob3 = blob2;
+    return blob;
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_VarReturn11", `
+function [#|f|]() {
+    let blob;
+    return blob;
+}
+`
+        );
+
+
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_Param1", `
+function [#|f|]() {
+    return my_print(fetch("https://typescriptlang.org").then(res => console.log(res)));
+}
+function my_print (resp) {
+    if (resp.ok) {
+        console.log(resp.buffer);
+    }
+    return resp;
+}
+
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Param2", `
+function [#|f|]() {
+    return my_print(fetch("https://typescriptlang.org").then(res => console.log(res))).catch(err => console.log("Error!", err));
+}
+function my_print (resp): Promise<void> {
+    if (resp.ok) {
+        console.log(resp.buffer);
+    }
+    return resp;
+}
+
+
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_MultipleReturns1", `
+function [#|f|](): Promise<void> {
+    let x = fetch("https://microsoft.com").then(res => console.log("Microsoft:", res));
+    if (x.ok) {
+        return fetch("https://typescriptlang.org").then(res => console.log(res));
+    }
+    return x.then(resp => {
+        var blob = resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_MultipleReturns2", `
+function [#|f|](): Promise<void> {
+    let x = fetch("https://microsoft.com").then(res => console.log("Microsoft:", res));
+    if (x.ok) {
+        return fetch("https://typescriptlang.org").then(res => console.log(res));
+    }
+    return x.then(resp => {
+        var blob = resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+        return fetch("https://microsoft.com").then(res => console.log("Another one!"));
+    });
+}
+`
+        );
+
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_SeperateLines", `
+function [#|f|](): Promise<string> {
+    var blob = fetch("https://typescriptlang.org")
+    blob.then(resp => {
+        var blob = resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+    });
+    blob.then(blob => {
+        return blob.toString();
+    });
+
+    return blob;
+}
+`
+        );
+
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerVarNameConflict", `
+function [#|f|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        var blob = resp.blob().then(blob => blob.byteOffset).catch(err => 'Error');
+    }).then(blob => {
+        return blob.toString();
+    });
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_InnerPromiseSimple", `
+function [#|f|](): Promise<string> {
+    return fetch("https://typescriptlang.org").then(resp => {
+        return resp.blob().then(blob => blob.byteOffset);
+    }).then(blob => {
+        return blob.toString();
+    });
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseAllAndThen1", `
+function [#|f|]() {
+    return Promise.resolve().then(function () {
+        return Promise.all([fetch("https://typescriptlang.org"), fetch("https://microsoft.com"), Promise.resolve().then(function () {
+                return fetch("https://github.com");
+              }).then(res => res.toString())]);
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseAllAndThen2", `
+function [#|f|]() {
+    return Promise.resolve().then(function () {
+        return Promise.all([fetch("https://typescriptlang.org"), fetch("https://microsoft.com"), Promise.resolve().then(function () {
+                return fetch("https://github.com");
+              })]).then(res => res.toString());
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseAllAndThen3", `
+function [#|f|]() {
+    return Promise.resolve().then(() =>
+        Promise.all([fetch("https://typescriptlang.org"), fetch("https://microsoft.com"), Promise.resolve().then(function () {
+            return fetch("https://github.com");
+        }).then(res => res.toString())]));
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseAllAndThen4", `
+function [#|f|]() {
+    return Promise.resolve().then(() =>
+        Promise.all([fetch("https://typescriptlang.org"), fetch("https://microsoft.com"), Promise.resolve().then(function () {
+            return fetch("https://github.com");
+        })]).then(res => res.toString()));
+}
+`
+        );
+        _testConvertToAsyncFunction("convertToAsyncFunction_Scope1", `
+function [#|f|]() {
+    var var1: Response, var2;
+    return fetch('https://typescriptlang.org').then( _ =>
+      Promise.resolve().then( res => {
+        var2 = "test";
+        return fetch("https://microsoft.com");
+      }).then(res =>
+         var1 === res
+      )
+    ).then(res);
+  }
+  function res(response){
+      console.log(response);
+  }
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Conditionals", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res => {
+      if (res.ok) {
+        return fetch("https://microsoft.com");
+      }
+      else {
+        if (res.buffer.length > 5) {
+          return res;
+        }
+        else {
+            return fetch("https://github.com");
+        }
+      }
+    });
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThen", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return result;
+}
+
+function rej(reject){
+    return reject;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMatchingTypes01", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result): number {
+    return 5;
+}
+
+function rej(reject): number {
+    return 3;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMatchingTypes01NoAnnotations", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return 5;
+}
+
+function rej(reject){
+    return 3;
+}
+`
+        );
+
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMatchingTypes02", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res => 0).catch(rej => 1).then(res);
+}
+
+function res(result): number {
+    return 5;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMatchingTypes02NoAnnotations", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res => 0).catch(rej => 1).then(res);
+}
+
+function res(result){
+    return 5;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMismatchTypes01", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return 5;
+}
+
+function rej(reject){
+    return "Error";
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMismatchTypes02", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return 5;
+}
+
+function rej(reject): Response{
+    return reject;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMismatchTypes02NoAnnotations", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return 5;
+}
+
+function rej(reject){
+    return reject;
+}
+`
+        );
+
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMismatchTypes03", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result){
+    return 5;
+}
+
+function rej(reject){
+    return Promise.resolve(1);
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_CatchFollowedByThenMismatchTypes04", `
+interface a {
+    name: string;
+    age: number;
+}
+
+interface b extends a {
+    color: string;
+}
+
+
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).then(res);
+}
+
+function res(result): b{
+    return {name: "myName", age: 22, color: "red"};
+}
+
+function rej(reject): a{
+    return {name: "myName", age: 27};
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_ParameterNameCollision", `
+async function foo<T>(x: T): Promise<T> {
+    return x;
+}
+
+function [#|bar|]<T>(x: T): Promise<T> {
+    return foo(x).then(foo)
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Return1", `
+function [#|f|](p: Promise<unknown>) {
+    return p.catch((error: Error) => {
+        return Promise.reject(error);
+    });
+}`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Return2", `
+function [#|f|](p: Promise<unknown>) {
+    return p.catch((error: Error) => Promise.reject(error));
+}`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Return3", `
+function [#|f|](p: Promise<unknown>) {
+    return p.catch(function (error: Error) {
+        return Promise.reject(error);
+    });
+}`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_LocalReturn", `
+function [#|f|]() {
+    let x = fetch("https://typescriptlang.org").then(res => console.log(res));
+    return x.catch(err => console.log("Error!", err));
+}
+
+`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_PromiseCallInner", `
+function [#|f|]() {
+    return fetch(Promise.resolve(1).then(res => "https://typescriptlang.org")).catch(err => console.log(err));
+}
+
+`);
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_CatchFollowedByCall", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res).catch(rej).toString();
+}
+
+function res(result){
+    return result;
+}
+
+function rej(reject){
+    return reject;
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Scope2", `
+function [#|f|](){
+    var i:number;
+    return fetch("https://typescriptlang.org").then(i => i.ok).then(res => i+1).catch(err => i-1)
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Loop", `
+function [#|f|](){
+    return fetch("https://typescriptlang.org").then(res => { for(let i=0; i<10; i++){
+        console.log(res);
+    }})
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Conditional2", `
+function [#|f|](){
+    var res = 100;
+    if (res > 50) {
+        return fetch("https://typescriptlang.org").then(res => console.log(res));
+    }
+    else {
+        return fetch("https://typescriptlang.org").then(res_func);
+    }
+}
+
+function res_func(result){
+    console.log(result);
+}
+`
+        );
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_Scope3", `
+function [#|f|]() {
+  var obj;
+  return fetch("https://typescriptlang.org").then(function (res) {
+    obj = {
+      func: function f() {
+        console.log(res);
+      }
+    };
+  });
+}
+`
+        );
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_NestedFunctionWrongLocation", `
+function [#|f|]() {
+    function fn2(){
+        function fn3(){
+            return fetch("https://typescriptlang.org").then(res => console.log(res));
+        }
+        return fn3();
+    }
+    return fn2();
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_NestedFunctionRightLocation", `
+function f() {
+    function fn2(){
+        function [#|fn3|](){
+            return fetch("https://typescriptlang.org").then(res => console.log(res));
+        }
+        return fn3();
+    }
+    return fn2();
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_UntypedFunction", `
+function [#|f|]() {
+    return Promise.resolve().then(res => console.log(res));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_TernaryConditional", `
+function [#|f|]() {
+    let i;
+    return Promise.resolve().then(res => res ? i = res : i = 100);
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_ResRejNoArgsArrow", `
+    function [#|f|]() {
+        return Promise.resolve().then(() => 1, () => "a");
+    }
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_simpleFunctionExpression", `
+const [#|foo|] = function () {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result) });
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_simpleFunctionExpressionWithName", `
+const foo = function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result) });
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_simpleFunctionExpressionAssignedToBindingPattern", `
+const { length } = [#|function|] () {
+    return fetch('https://typescriptlang.org').then(result => { console.log(result) });
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_catchBlockUniqueParams", `
+function [#|f|]() {
+    return Promise.resolve().then(x => 1).catch(x => "a").then(x => !!x);
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_catchBlockUniqueParamsBindingPattern", `
+function [#|f|]() {
+    return Promise.resolve().then(() => ({ x: 3 })).catch(() => ({ x: "a" })).then(({ x }) => !!x);
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_bindingPattern", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(res);
+}
+function res({ status, trailer }){
+    console.log(status);
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_bindingPatternNameCollision", `
+function [#|f|]() {
+    const result = 'https://typescriptlang.org';
+    return fetch(result).then(res);
+}
+function res({ status, trailer }){
+    console.log(status);
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_thenArgumentNotFunction", `
+function [#|f|]() {
+    return Promise.resolve().then(f ? (x => x) : (y => y));
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_thenArgumentNotFunctionNotLastInChain", `
+function [#|f|]() {
+    return Promise.resolve().then(f ? (x => x) : (y => y)).then(q => q);
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_runEffectfulContinuation", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(res).then(_ => console.log("done"));
+}
+function res(result) {
+    return Promise.resolve().then(x => console.log(result));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackReturnsPromise", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(s => Promise.resolve(s.statusText.length)).then(x => console.log(x + 5));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackReturnsPromiseInBlock", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(s => { return Promise.resolve(s.statusText.length) }).then(x => x + 5);
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackReturnsFixablePromise", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(s => Promise.resolve(s.statusText).then(st => st.length)).then(x => console.log(x + 5));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackReturnsPromiseLastInChain", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(s => Promise.resolve(s.statusText.length));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackReturnsRejectedPromiseInTryBlock", `
+function [#|f|]() {
+    return Promise.resolve(1)
+        .then(x => Promise.reject(x))
+        .catch(err => console.log(err));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_nestedPromises", `
+function [#|f|]() {
+    return fetch('https://typescriptlang.org').then(x => Promise.resolve(3).then(y => Promise.resolve(x.statusText.length + y)));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_noArgs1", `
+function delay(millis: number): Promise<void> {
+    throw "no"
+}
+
+function [#|main2|]() {
+    console.log("Please wait. Loading.");
+    return delay(500)
+        .then(() => { console.log("."); return delay(500); })
+        .then(() => { console.log("."); return delay(500); })
+        .then(() => { console.log("."); return delay(500); })
+}
+        `);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_noArgs2", `
+function delay(millis: number): Promise<void> {
+    throw "no"
+}
+
+function [#|main2|]() {
+    console.log("Please wait. Loading.");
+    return delay(500)
+        .then(() => delay(500))
+        .then(() => delay(500))
+        .then(() => delay(500))
+}
+        `);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_exportModifier", `
+export function [#|foo|]() {
+    return fetch('https://typescriptlang.org').then(s => console.log(s));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_OutermostOnlySuccess", `
+function [#|foo|]() {
+    return fetch('a').then(() => {
+        return fetch('b').then(() => 'c');
+    })
+}
+`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_decoratedMethod", `
+function decorator() {
+    return (target: any, key: any, descriptor: PropertyDescriptor) => descriptor;
+}
+class Foo {
+    @decorator()
+    [#|method|]() {
+        return fetch('a').then(x => x);
+    }
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_decoratedMethodWithSingleLineComment", `
+function decorator() {
+    return (target: any, key: any, descriptor: PropertyDescriptor) => descriptor;
+}
+class Foo {
+    @decorator()
+    // comment
+    [#|method|]() {
+        return fetch('a').then(x => x);
+    }
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_decoratedMethodWithMultipleLineComment", `
+function decorator() {
+    return (target: any, key: any, descriptor: PropertyDescriptor) => descriptor;
+}
+class Foo {
+    @decorator()
     /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows this continuation.
-     * @param continuationArgName The argument name for the continuation that follows this call.
+     * comment
      */
-    function transformFinally(node: PromiseReturningCallExpression<"finally">, onFinally: Expression | undefined, transformer: Transformer, hasContinuation: boolean, continuationArgName?: SynthBindingName): readonly Statement[] {
-        if (!onFinally || isNullOrUndefined(transformer, onFinally)) {
-            // Ignore this call as it has no effect on the result
-            return transformExpression(/* returnContextNode */ node, node.expression.expression, transformer, hasContinuation, continuationArgName);
-        }
-
-        const possibleNameForVarDecl = getPossibleNameForVarDecl(node, transformer, continuationArgName);
-
-        // Transform the left-hand-side of `.finally` into an array of inlined statements. We pass `true` for hasContinuation as `node` is the outer continuation.
-        const inlinedLeftHandSide = transformExpression(/*returnContextNode*/ node, node.expression.expression, transformer, /*hasContinuation*/ true, possibleNameForVarDecl);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
-
-        // Transform the callback argument into an array of inlined statements. We pass whether we have an outer continuation here
-        // as that indicates whether `return` is valid.
-        const inlinedCallback = transformCallbackArgument(onFinally, hasContinuation, /*continuationArgName*/ undefined, /*argName*/ undefined, node, transformer);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
-
-        const tryBlock = factory.createBlock(inlinedLeftHandSide);
-        const finallyBlock = factory.createBlock(inlinedCallback);
-        const tryStatement = factory.createTryStatement(tryBlock, /*catchClause*/ undefined, finallyBlock);
-        return finishCatchOrFinallyTransform(node, transformer, tryStatement, possibleNameForVarDecl, continuationArgName);
+    [#|method|]() {
+        return fetch('a').then(x => x);
     }
+}
+`);
 
-    /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows this continuation.
-     * @param continuationArgName The argument name for the continuation that follows this call.
-     */
-    function transformCatch(node: PromiseReturningCallExpression<"then" | "catch">, onRejected: Expression | undefined, transformer: Transformer, hasContinuation: boolean, continuationArgName?: SynthBindingName): readonly Statement[] {
-        if (!onRejected || isNullOrUndefined(transformer, onRejected)) {
-            // Ignore this call as it has no effect on the result
-            return transformExpression(/* returnContextNode */ node, node.expression.expression, transformer, hasContinuation, continuationArgName);
-        }
-
-        const inputArgName = getArgBindingName(onRejected, transformer);
-        const possibleNameForVarDecl = getPossibleNameForVarDecl(node, transformer, continuationArgName);
-
-        // Transform the left-hand-side of `.then`/`.catch` into an array of inlined statements. We pass `true` for hasContinuation as `node` is the outer continuation.
-        const inlinedLeftHandSide = transformExpression(/*returnContextNode*/ node, node.expression.expression, transformer, /*hasContinuation*/ true, possibleNameForVarDecl);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
-
-        // Transform the callback argument into an array of inlined statements. We pass whether we have an outer continuation here
-        // as that indicates whether `return` is valid.
-        const inlinedCallback = transformCallbackArgument(onRejected, hasContinuation, possibleNameForVarDecl, inputArgName, node, transformer);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
-
-        const tryBlock = factory.createBlock(inlinedLeftHandSide);
-        const catchClause = factory.createCatchClause(inputArgName && getSynthesizedDeepClone(declareSynthBindingName(inputArgName)), factory.createBlock(inlinedCallback));
-        const tryStatement = factory.createTryStatement(tryBlock, catchClause, /*finallyBlock*/ undefined);
-        return finishCatchOrFinallyTransform(node, transformer, tryStatement, possibleNameForVarDecl, continuationArgName);
+        _testConvertToAsyncFunction("convertToAsyncFunction_decoratedMethodWithModifier", `
+function decorator() {
+    return (target: any, key: any, descriptor: PropertyDescriptor) => descriptor;
+}
+class Foo {
+    @decorator()
+    public [#|method|]() {
+        return fetch('a').then(x => x);
     }
+}
+`);
 
-    /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows this continuation.
-     * @param continuationArgName The argument name for the continuation that follows this call.
-     */
-    function transformThen(node: PromiseReturningCallExpression<"then">, onFulfilled: Expression | undefined, onRejected: Expression | undefined, transformer: Transformer, hasContinuation: boolean, continuationArgName?: SynthBindingName): readonly Statement[] {
-        if (!onFulfilled || isNullOrUndefined(transformer, onFulfilled)) {
-            // If we don't have an `onfulfilled` callback, try treating this as a `.catch`.
-            return transformCatch(node, onRejected, transformer, hasContinuation, continuationArgName);
-        }
+        _testConvertToAsyncFunctionFailedSuggestion("convertToAsyncFunction_OutermostOnlyFailure", `
+function foo() {
+    return fetch('a').then([#|() => {|]
+        return fetch('b').then(() => 'c');
+    })
+}
+`);
 
-        // We don't currently support transforming a `.then` with both onfulfilled and onrejected handlers, per GH#38152.
-        if (onRejected && !isNullOrUndefined(transformer, onRejected)) {
-            return silentFail();
-        }
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenTypeArgument1", `
+type APIResponse<T> = { success: true, data: T } | { success: false };
 
-        const inputArgName = getArgBindingName(onFulfilled, transformer);
+function wrapResponse<T>(response: T): APIResponse<T> {
+    return { success: true, data: response };
+}
 
-        // Transform the left-hand-side of `.then` into an array of inlined statements. We pass `true` for hasContinuation as `node` is the outer continuation.
-        const inlinedLeftHandSide = transformExpression(node.expression.expression, node.expression.expression, transformer, /*hasContinuation*/ true, inputArgName);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
+function [#|get|]() {
+    return Promise.resolve(undefined!).then<APIResponse<{ email: string }>>(wrapResponse);
+}
+`);
 
-        // Transform the callback argument into an array of inlined statements. We pass whether we have an outer continuation here
-        // as that indicates whether `return` is valid.
-        const inlinedCallback = transformCallbackArgument(onFulfilled, hasContinuation, continuationArgName, inputArgName, node, transformer);
-        if (hasFailed()) return silentFail(); // shortcut out of more work
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenTypeArgument2", `
+type APIResponse<T> = { success: true, data: T } | { success: false };
 
-        return concatenate(inlinedLeftHandSide, inlinedCallback);
+function wrapResponse<T>(response: T): APIResponse<T> {
+    return { success: true, data: response };
+}
+
+function [#|get|]() {
+    return Promise.resolve(undefined!).then<APIResponse<{ email: string }>>(d => wrapResponse(d));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenTypeArgument3", `
+type APIResponse<T> = { success: true, data: T } | { success: false };
+
+function wrapResponse<T>(response: T): APIResponse<T> {
+    return { success: true, data: response };
+}
+
+function [#|get|]() {
+    return Promise.resolve(undefined!).then<APIResponse<{ email: string }>>(d => {
+        console.log(d);
+        return wrapResponse(d);
+    });
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_catchTypeArgument1", `
+type APIResponse<T> = { success: true, data: T } | { success: false };
+
+function [#|get|]() {
+    return Promise
+        .resolve<APIResponse<{ email: string }>>({ success: true, data: { email: "" } })
+        .catch<APIResponse<{ email: string }>>(() => ({ success: false }));
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction_threeArguments", `
+function [#|f|]() {
+    return Promise.resolve().then(undefined, undefined, () => 1);
+}`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_callbackArgument", `
+function foo(props: any): void {
+    return props;
+}
+
+const fn = (): Promise<(message: string) => void> =>
+    new Promise(resolve => resolve((message: string) => foo(message)));
+
+function [#|f|]() {
+    return fn().then(res => res("test"));
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_emptyCatch1", `
+function [#|f|]() {
+    return Promise.resolve().catch();
+}
+`);
+
+        _testConvertToAsyncFunction("convertToAsyncFunction_emptyCatch2", `
+function [#|f|]() {
+    return Promise.resolve(0).then(x => x).catch();
+}
+`);
+
+        _testConvertToAsyncFunctionWithModule("convertToAsyncFunction_importedFunction", `
+import { fn } from "./module";
+function [#|f|]() {
+    return Promise.resolve(0).then(fn);
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction__NoSuggestionInFunctionsWithNonFixableReturnStatements1", `
+function f(x: number): Promise<void>;
+function f(): void;
+function [#|f|](x?: number): Promise<void> | void {
+    if (!x) return;
+    return fetch('').then(() => {});
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction__NoSuggestionInFunctionsWithNonFixableReturnStatements2", `
+function f(x: number): Promise<void>;
+function f(): number;
+function [#|f|](x?: number): Promise<void> | number {
+    if (x) return x;
+    return fetch('').then(() => {});
+}
+`);
+
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction__NoSuggestionInGetters", `
+class Foo {
+    get [#|m|](): Promise<number> {
+        return Promise.resolve(1).then(n => n);
     }
+}
+`);
 
-    /**
-     * Transforms the 'x' part of `x.then(...)`, or the 'y()' part of `y().catch(...)`, where 'x' and 'y()' are Promises.
-     */
-    function transformPromiseExpressionOfPropertyAccess(returnContextNode: Expression, node: Expression, transformer: Transformer, hasContinuation: boolean, continuationArgName?: SynthBindingName): readonly Statement[] {
-        if (shouldReturn(returnContextNode, transformer)) {
-            let returnValue = getSynthesizedDeepClone(node);
-            if (hasContinuation) {
-                returnValue = factory.createAwaitExpression(returnValue);
-            }
-            return [factory.createReturnStatement(returnValue)];
+        _testConvertToAsyncFunctionFailed("convertToAsyncFunction__NoSuggestionForGeneratorCallbacks", `
+function [#|foo|](p: Promise<string[]>) {
+    return p.then(function* (strings) {
+        for (const s of strings) {
+            yield s.toUpperCase();
         }
+    });
+}
+`);
 
-        return createVariableOrAssignmentOrExpressionStatement(continuationArgName, factory.createAwaitExpression(node), /*typeAnnotation*/ undefined);
-    }
-
-    function createVariableOrAssignmentOrExpressionStatement(variableName: SynthBindingName | undefined, rightHandSide: Expression, typeAnnotation: TypeNode | undefined): readonly Statement[] {
-        if (!variableName || isEmptyBindingName(variableName)) {
-            // if there's no argName to assign to, there still might be side effects
-            return [factory.createExpressionStatement(rightHandSide)];
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenNoArguments", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then();
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_catchNoArguments", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().catch();
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_chainedThenCatchThen", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then(x => Promise.resolve(x + 1)).catch(() => 1).then(y => y + 2);
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_finally", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().finally(() => console.log("done"));
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_finallyNoArguments", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().finally();
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_finallyNull", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().finally(null);
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_finallyUndefined", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().finally(undefined);
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenFinally", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then(x => x + 1).finally(() => console.log("done"));
+}`);
+        _testConvertToAsyncFunction("convertToAsyncFunction_thenFinallyThen", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then(x => Promise.resolve(x + 1)).finally(() => console.log("done")).then(y => y + 2);
+}`);
+        _testConvertToAsyncFunctionFailedAction("convertToAsyncFunction_returnInBranch", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then(() => {
+        if (Math.random()) {
+            return 1;
         }
-
-        if (isSynthIdentifier(variableName) && variableName.hasBeenDeclared) {
-            // if the variable has already been declared, we don't need "let" or "const"
-            return [factory.createExpressionStatement(factory.createAssignment(getSynthesizedDeepClone(referenceSynthIdentifier(variableName)), rightHandSide))];
+        return 2;
+    }).then(a => {
+        return a + 1;
+    });
+}
+`);
+        _testConvertToAsyncFunctionFailedAction("convertToAsyncFunction_partialReturnInBranch", `
+declare function foo(): Promise<number>;
+function [#|f|](): Promise<number> {
+    return foo().then(() => {
+        if (Math.random()) {
+            return 1;
         }
-
-        return [
-            factory.createVariableStatement(
-                /*modifiers*/ undefined,
-                factory.createVariableDeclarationList([
-                    factory.createVariableDeclaration(
-                        getSynthesizedDeepClone(declareSynthBindingName(variableName)),
-                        /*exclamationToken*/ undefined,
-                        typeAnnotation,
-                        rightHandSide)],
-                    NodeFlags.Const))];
-    }
-
-    function maybeAnnotateAndReturn(expressionToReturn: Expression | undefined, typeAnnotation: TypeNode | undefined): Statement[] {
-        if (typeAnnotation && expressionToReturn) {
-            const name = factory.createUniqueName("result", GeneratedIdentifierFlags.Optimistic);
-            return [
-                ...createVariableOrAssignmentOrExpressionStatement(createSynthIdentifier(name), expressionToReturn, typeAnnotation),
-                factory.createReturnStatement(name)
-            ];
-        }
-        return [factory.createReturnStatement(expressionToReturn)];
-    }
-
-    // should be kept up to date with isFixablePromiseArgument in suggestionDiagnostics.ts
-    /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows the continuation to which this callback belongs.
-     * @param continuationArgName The argument name for the continuation that follows this call.
-     * @param inputArgName The argument name provided to this call
-     */
-    function transformCallbackArgument(func: Expression, hasContinuation: boolean, continuationArgName: SynthBindingName | undefined, inputArgName: SynthBindingName | undefined, parent: PromiseReturningCallExpression<"then" | "catch" | "finally">, transformer: Transformer): readonly Statement[] {
-        switch (func.kind) {
-            case SyntaxKind.NullKeyword:
-                // do not produce a transformed statement for a null argument
-                break;
-            case SyntaxKind.PropertyAccessExpression:
-            case SyntaxKind.Identifier: // identifier includes undefined
-                if (!inputArgName) {
-                    // undefined was argument passed to promise handler
-                    break;
-                }
-
-                const synthCall = factory.createCallExpression(getSynthesizedDeepClone(func as Identifier | PropertyAccessExpression), /*typeArguments*/ undefined, isSynthIdentifier(inputArgName) ? [referenceSynthIdentifier(inputArgName)] : []);
-
-                if (shouldReturn(parent, transformer)) {
-                    return maybeAnnotateAndReturn(synthCall, getExplicitPromisedTypeOfPromiseReturningCallExpression(parent, func, transformer.checker));
-                }
-
-                const type = transformer.checker.getTypeAtLocation(func);
-                const callSignatures = transformer.checker.getSignaturesOfType(type, SignatureKind.Call);
-                if (!callSignatures.length) {
-                    // if identifier in handler has no call signatures, it's invalid
-                    return silentFail();
-                }
-                const returnType = callSignatures[0].getReturnType();
-                const varDeclOrAssignment = createVariableOrAssignmentOrExpressionStatement(continuationArgName, factory.createAwaitExpression(synthCall), getExplicitPromisedTypeOfPromiseReturningCallExpression(parent, func, transformer.checker));
-                if (continuationArgName) {
-                    continuationArgName.types.push(transformer.checker.getAwaitedType(returnType) || returnType);
-                }
-                return varDeclOrAssignment;
-
-            case SyntaxKind.FunctionExpression:
-            case SyntaxKind.ArrowFunction: {
-                const funcBody = (func as FunctionExpression | ArrowFunction).body;
-                const returnType = getLastCallSignature(transformer.checker.getTypeAtLocation(func), transformer.checker)?.getReturnType();
-
-                // Arrow functions with block bodies { } will enter this control flow
-                if (isBlock(funcBody)) {
-                    let refactoredStmts: Statement[] = [];
-                    let seenReturnStatement = false;
-                    for (const statement of funcBody.statements) {
-                        if (isReturnStatement(statement)) {
-                            seenReturnStatement = true;
-                            if (isReturnStatementWithFixablePromiseHandler(statement, transformer.checker)) {
-                                refactoredStmts = refactoredStmts.concat(transformReturnStatementWithFixablePromiseHandler(transformer, statement, hasContinuation, continuationArgName));
-                            }
-                            else {
-                                const possiblyAwaitedRightHandSide = returnType && statement.expression ? getPossiblyAwaitedRightHandSide(transformer.checker, returnType, statement.expression) : statement.expression;
-                                refactoredStmts.push(...maybeAnnotateAndReturn(possiblyAwaitedRightHandSide, getExplicitPromisedTypeOfPromiseReturningCallExpression(parent, func, transformer.checker)));
-                            }
-                        }
-                        else if (hasContinuation && forEachReturnStatement(statement, returnTrue)) {
-                            // If there is a nested `return` in a callback that has a trailing continuation, we don't transform it as the resulting complexity is too great. For example:
-                            //
-                            // source                               | result
-                            // -------------------------------------| ---------------------------------------
-                            // function f(): Promise<number> {      | async function f9(): Promise<number> {
-                            //     return foo().then(() => {        |     await foo();
-                            //         if (Math.random()) {         |     if (Math.random()) {
-                            //             return 1;                |         return 1; // incorrect early return
-                            //         }                            |     }
-                            //         return 2;                    |     return 2; // incorrect early return
-                            //     }).then(a => {                   |     const a = undefined;
-                            //         return a + 1;                |     return a + 1;
-                            //     });                              | }
-                            // }                                    |
-                            //
-                            // However, branching returns in the outermost continuation are acceptable as no other continuation follows it:
-                            //
-                            // source                               | result
-                            //--------------------------------------|---------------------------------------
-                            // function f() {                       | async function f() {
-                            //     return foo().then(res => {       |     const res = await foo();
-                            //       if (res.ok) {                  |     if (res.ok) {
-                            //         return 1;                    |         return 1;
-                            //       }                              |     }
-                            //       else {                         |     else {
-                            //         if (res.buffer.length > 5) { |         if (res.buffer.length > 5) {
-                            //           return 2;                  |             return 2;
-                            //         }                            |         }
-                            //         else {                       |         else {
-                            //             return 3;                |             return 3;
-                            //         }                            |         }
-                            //       }                              |     }
-                            //     });                              | }
-                            // }                                    |
-                            //
-                            // We may improve this in the future, but for now the heuristics are too complex
-
-                            return silentFail();
-                        }
-                        else {
-                            refactoredStmts.push(statement);
-                        }
-                    }
-
-                    return shouldReturn(parent, transformer)
-                        ? refactoredStmts.map(s => getSynthesizedDeepClone(s))
-                        : removeReturns(
-                            refactoredStmts,
-                            continuationArgName,
-                            transformer,
-                            seenReturnStatement);
-                }
-                else {
-                    const inlinedStatements = isFixablePromiseHandler(funcBody, transformer.checker) ?
-                        transformReturnStatementWithFixablePromiseHandler(transformer, factory.createReturnStatement(funcBody), hasContinuation, continuationArgName) :
-                        emptyArray;
-
-                    if (inlinedStatements.length > 0) {
-                        return inlinedStatements;
-                    }
-
-                    if (returnType) {
-                        const possiblyAwaitedRightHandSide = getPossiblyAwaitedRightHandSide(transformer.checker, returnType, funcBody);
-
-                        if (!shouldReturn(parent, transformer)) {
-                            const transformedStatement = createVariableOrAssignmentOrExpressionStatement(continuationArgName, possiblyAwaitedRightHandSide, /*typeAnnotation*/ undefined);
-                            if (continuationArgName) {
-                                continuationArgName.types.push(transformer.checker.getAwaitedType(returnType) || returnType);
-                            }
-                            return transformedStatement;
-                        }
-                        else {
-                            return maybeAnnotateAndReturn(possiblyAwaitedRightHandSide, getExplicitPromisedTypeOfPromiseReturningCallExpression(parent, func, transformer.checker));
-                        }
-                    }
-                    else {
-                        return silentFail();
-                    }
-                }
-            }
-            default:
-                // If no cases apply, we've found a transformation body we don't know how to handle, so the refactoring should no-op to avoid deleting code.
-                return silentFail();
-        }
-        return emptyArray;
-    }
-
-    function getPossiblyAwaitedRightHandSide(checker: TypeChecker, type: Type, expr: Expression): AwaitExpression | Expression {
-        const rightHandSide = getSynthesizedDeepClone(expr);
-        return !!checker.getPromisedTypeOfPromise(type) ? factory.createAwaitExpression(rightHandSide) : rightHandSide;
-    }
-
-    function getLastCallSignature(type: Type, checker: TypeChecker): Signature | undefined {
-        const callSignatures = checker.getSignaturesOfType(type, SignatureKind.Call);
-        return lastOrUndefined(callSignatures);
-    }
-
-    function removeReturns(stmts: readonly Statement[], prevArgName: SynthBindingName | undefined, transformer: Transformer, seenReturnStatement: boolean): readonly Statement[] {
-        const ret: Statement[] = [];
-        for (const stmt of stmts) {
-            if (isReturnStatement(stmt)) {
-                if (stmt.expression) {
-                    const possiblyAwaitedExpression = isPromiseTypedExpression(stmt.expression, transformer.checker) ? factory.createAwaitExpression(stmt.expression) : stmt.expression;
-                    if (prevArgName === undefined) {
-                        ret.push(factory.createExpressionStatement(possiblyAwaitedExpression));
-                    }
-                    else if (isSynthIdentifier(prevArgName) && prevArgName.hasBeenDeclared) {
-                        ret.push(factory.createExpressionStatement(factory.createAssignment(referenceSynthIdentifier(prevArgName), possiblyAwaitedExpression)));
-                    }
-                    else {
-                        ret.push(factory.createVariableStatement(/*modifiers*/ undefined,
-                            (factory.createVariableDeclarationList([factory.createVariableDeclaration(declareSynthBindingName(prevArgName), /*exclamationToken*/ undefined, /*type*/ undefined, possiblyAwaitedExpression)], NodeFlags.Const))));
-                    }
-                }
-            }
-            else {
-                ret.push(getSynthesizedDeepClone(stmt));
-            }
-        }
-
-        // if block has no return statement, need to define prevArgName as undefined to prevent undeclared variables
-        if (!seenReturnStatement && prevArgName !== undefined) {
-            ret.push(factory.createVariableStatement(/*modifiers*/ undefined,
-                (factory.createVariableDeclarationList([factory.createVariableDeclaration(declareSynthBindingName(prevArgName), /*exclamationToken*/ undefined, /*type*/ undefined, factory.createIdentifier("undefined"))], NodeFlags.Const))));
-        }
-
-        return ret;
-    }
-
-    /**
-     * @param hasContinuation Whether another `then`, `catch`, or `finally` continuation follows the continuation to which this statement belongs.
-     * @param continuationArgName The argument name for the continuation that follows this call.
-     */
-    function transformReturnStatementWithFixablePromiseHandler(transformer: Transformer, innerRetStmt: ReturnStatement, hasContinuation: boolean, continuationArgName?: SynthBindingName) {
-        let innerCbBody: Statement[] = [];
-        forEachChild(innerRetStmt, function visit(node) {
-            if (isCallExpression(node)) {
-                const temp = transformExpression(node, node, transformer, hasContinuation, continuationArgName);
-                innerCbBody = innerCbBody.concat(temp);
-                if (innerCbBody.length > 0) {
-                    return;
-                }
-            }
-            else if (!isFunctionLike(node)) {
-                forEachChild(node, visit);
-            }
-        });
-        return innerCbBody;
-    }
-
-    function getArgBindingName(funcNode: Expression, transformer: Transformer): SynthBindingName | undefined {
-        const types: Type[] = [];
-        let name: SynthBindingName | undefined;
-
-        if (isFunctionLikeDeclaration(funcNode)) {
-            if (funcNode.parameters.length > 0) {
-                const param = funcNode.parameters[0].name;
-                name = getMappedBindingNameOrDefault(param);
-            }
-        }
-        else if (isIdentifier(funcNode)) {
-            name = getMapEntryOrDefault(funcNode);
-        }
-        else if (isPropertyAccessExpression(funcNode) && isIdentifier(funcNode.name)) {
-            name = getMapEntryOrDefault(funcNode.name);
-        }
-
-        // return undefined argName when arg is null or undefined
-        // eslint-disable-next-line no-in-operator
-        if (!name || "identifier" in name && name.identifier.text === "undefined") {
-            return undefined;
-        }
-
-        return name;
-
-        function getMappedBindingNameOrDefault(bindingName: BindingName): SynthBindingName {
-            if (isIdentifier(bindingName)) return getMapEntryOrDefault(bindingName);
-            const elements = flatMap(bindingName.elements, element => {
-                if (isOmittedExpression(element)) return [];
-                return [getMappedBindingNameOrDefault(element.name)];
-            });
-
-            return createSynthBindingPattern(bindingName, elements);
-        }
-
-        function getMapEntryOrDefault(identifier: Identifier): SynthIdentifier {
-            const originalNode = getOriginalNode(identifier);
-            const symbol = getSymbol(originalNode);
-
-            if (!symbol) {
-                return createSynthIdentifier(identifier, types);
-            }
-
-            const mapEntry = transformer.synthNamesMap.get(getSymbolId(symbol).toString());
-            return mapEntry || createSynthIdentifier(identifier, types);
-        }
-
-        function getSymbol(node: Node): Symbol | undefined {
-            return node.symbol ? node.symbol : transformer.checker.getSymbolAtLocation(node);
-        }
-
-        function getOriginalNode(node: Node): Node {
-            return node.original ? node.original : node;
-        }
-    }
-
-    function isEmptyBindingName(bindingName: SynthBindingName | undefined): boolean {
-        if (!bindingName) {
-            return true;
-        }
-        if (isSynthIdentifier(bindingName)) {
-            return !bindingName.identifier.text;
-        }
-        return every(bindingName.elements, isEmptyBindingName);
-    }
-
-    function createSynthIdentifier(identifier: Identifier, types: Type[] = []): SynthIdentifier {
-        return { kind: SynthBindingNameKind.Identifier, identifier, types, hasBeenDeclared: false, hasBeenReferenced: false };
-    }
-
-    function createSynthBindingPattern(bindingPattern: BindingPattern, elements: readonly SynthBindingName[] = emptyArray, types: Type[] = []): SynthBindingPattern {
-        return { kind: SynthBindingNameKind.BindingPattern, bindingPattern, elements, types };
-    }
-
-    function referenceSynthIdentifier(synthId: SynthIdentifier) {
-        synthId.hasBeenReferenced = true;
-        return synthId.identifier;
-    }
-
-    function declareSynthBindingName(synthName: SynthBindingName) {
-        return isSynthIdentifier(synthName) ? declareSynthIdentifier(synthName) : declareSynthBindingPattern(synthName);
-    }
-
-    function declareSynthBindingPattern(synthPattern: SynthBindingPattern) {
-        for (const element of synthPattern.elements) {
-            declareSynthBindingName(element);
-        }
-        return synthPattern.bindingPattern;
-    }
-
-    function declareSynthIdentifier(synthId: SynthIdentifier) {
-        synthId.hasBeenDeclared = true;
-        return synthId.identifier;
-    }
-
-    function isSynthIdentifier(bindingName: SynthBindingName): bindingName is SynthIdentifier {
-        return bindingName.kind === SynthBindingNameKind.Identifier;
-    }
-
-    function isSynthBindingPattern(bindingName: SynthBindingName): bindingName is SynthBindingPattern {
-        return bindingName.kind === SynthBindingNameKind.BindingPattern;
-    }
-
-    function shouldReturn(expression: Expression, transformer: Transformer): boolean {
-        return !!expression.original && transformer.setOfExpressionsToReturn.has(getNodeId(expression.original));
-    }
+        console.log("foo");
+    }).then(a => {
+        return a + 1;
+    });
+}
+`);
+    });
 }
